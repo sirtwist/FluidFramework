@@ -13,12 +13,13 @@ import {
     IPromiseTimerResult,
 } from "@fluidframework/common-utils";
 import { ChildLogger, PerformanceEvent } from "@fluidframework/telemetry-utils";
-import { IFluidObject, IRequest, DriverHeader } from "@fluidframework/core-interfaces";
+import { IFluidObject, IRequest } from "@fluidframework/core-interfaces";
 import {
     IContainerContext,
     LoaderHeader,
 } from "@fluidframework/container-definitions";
 import { ISequencedClient } from "@fluidframework/protocol-definitions";
+import { DriverHeader } from "@fluidframework/driver-definitions";
 import { ISummarizer, Summarizer, createSummarizingWarning, ISummarizingWarning } from "./summarizer";
 
 export const summarizerClientType = "summarizer";
@@ -229,7 +230,7 @@ export class SummaryManager extends EventEmitter implements IDisposable {
     }
 
     public on(event: "summarizer", listener: (clientId: string) => void): this;
-    public on(event: string | symbol, listener: (...args: any[]) => void): this {
+    public on(event: string, listener: (...args: any[]) => void): this {
         return super.on(event, listener);
     }
 
@@ -356,7 +357,6 @@ export class SummaryManager extends EventEmitter implements IDisposable {
         const clientId = this.latestClientId!;
         this.runningSummarizer = summarizer;
 
-        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         PerformanceEvent.timedExecAsync(
             this.logger,
             { eventName: "RunningSummarizer", attempt: this.startThrottler.attempts },
@@ -440,14 +440,14 @@ export class SummaryManager extends EventEmitter implements IDisposable {
 
         if (response.status !== 200
             || (response.mimeType !== "fluid/object" && response.mimeType !== "fluid/component")) {
-            return Promise.reject<ISummarizer>("Invalid summarizer route");
+            return Promise.reject(new Error("Invalid summarizer route"));
         }
 
         const rawFluidObject = response.value as IFluidObject;
         const summarizer = rawFluidObject.ISummarizer;
 
         if (!summarizer) {
-            return Promise.reject<ISummarizer>("Fluid object does not implement ISummarizer");
+            return Promise.reject(new Error("Fluid object does not implement ISummarizer"));
         }
 
         return summarizer;

@@ -35,6 +35,7 @@ import {
  * the render function to be filled in.
  */
 export abstract class SyncedDataObject<
+    // eslint-disable-next-line @typescript-eslint/ban-types
     P extends IFluidObject = object,
     S = undefined,
     E extends IEvent = IEvent
@@ -107,6 +108,7 @@ export abstract class SyncedDataObject<
      * @param key - The syncedStateId that maps to the view that will be using these definitions
      * @param value - The config value containing the syncedStateId and the fluidToView and viewToFluid maps
      */
+    // eslint-disable-next-line @typescript-eslint/no-shadow
     public setConfig<S>(key: string, value: ISyncedStateConfig<S, S>) {
         this.syncedStateConfig.set(key, value);
     }

@@ -12,5 +12,7 @@ export * from "./testDocumentStorage";
 export * from "./testHistorian";
 export * from "./testKafka";
 export * from "./testPublisher";
-export * from "./testTaskMessageSender";
 export * from "./testTenantManager";
+export * from "./testThrottleStorageManager";
+export * from "./testThrottlerHelper";
+export * from "./testThrottler";

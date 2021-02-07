@@ -6,23 +6,22 @@
 import {
     IDocumentDeltaConnection,
     IDocumentDeltaStorageService,
-    IDocumentStorageService,
     IDocumentDeltaConnectionEvents,
+    IDocumentService,
 } from "@fluidframework/driver-definitions";
 import {
     ConnectionMode,
+    IClientConfiguration,
     IConnected,
-    IContentMessage,
     IDocumentMessage,
     ISequencedDocumentMessage,
-    IServiceConfiguration,
     ISignalClient,
     ISignalMessage,
     ITokenClaims,
     IVersion,
     ScopeType,
 } from "@fluidframework/protocol-definitions";
-import { TypedEventEmitter } from "@fluidframework/common-utils";
+import { assert, TypedEventEmitter } from "@fluidframework/common-utils";
 import { debug } from "./debug";
 import { ReplayController } from "./replayController";
 
@@ -56,7 +55,7 @@ export class ReplayControllerStatic extends ReplayController {
         }
     }
 
-    public async initStorage(storage: IDocumentStorageService) {
+    public async initStorage(documentService: IDocumentService) {
         return true;
     }
 
@@ -65,11 +64,15 @@ export class ReplayControllerStatic extends ReplayController {
     }
 
     public async getSnapshotTree(version?: IVersion) {
-        return version ? Promise.reject("Invalid operation") : null;
+        return version ? Promise.reject(new Error("Invalid operation")) : null;
     }
 
     public async read(blobId: string): Promise<string> {
-        return Promise.reject("Invalid operation");
+        return Promise.reject(new Error("Invalid operation"));
+    }
+
+    public async readBlob(blobId: string): Promise<ArrayBufferLike> {
+        return Promise.reject(new Error("Invalid operation"));
     }
 
     public async getStartingOpSequence(): Promise<number> {
@@ -200,12 +203,12 @@ export class ReplayDocumentDeltaConnection
             claims: ReplayDocumentDeltaConnection.claims,
             clientId: "",
             existing: true,
-            initialContents: [],
             initialMessages: [],
             initialSignals: [],
             initialClients: [],
             maxMessageSize: ReplayDocumentDeltaConnection.ReplayMaxMessageSize,
             mode: "write",
+            // Back-compat, removal tracked with issue #4346
             parentBranch: null,
             serviceConfiguration: {
                 blockSize: 64436,
@@ -238,6 +241,9 @@ export class ReplayDocumentDeltaConnection
         user: {
             id: "",
         },
+        iat: Math.round(new Date().getTime() / 1000),
+        exp: Math.round(new Date().getTime() / 1000) + 60 * 60, // 1 hour expiration
+        ver: "1.0",
     };
 
     public get clientId(): string {
@@ -256,16 +262,8 @@ export class ReplayDocumentDeltaConnection
         return this.details.existing;
     }
 
-    public get parentBranch(): string | null {
-        return this.details.parentBranch;
-    }
-
     public get version(): string {
         return this.details.version;
-    }
-
-    public get initialContents(): IContentMessage[] {
-        return this.details.initialContents;
     }
 
     public get initialMessages(): ISequencedDocumentMessage[] {
@@ -280,7 +278,7 @@ export class ReplayDocumentDeltaConnection
         return this.details.initialClients;
     }
 
-    public get serviceConfiguration(): IServiceConfiguration {
+    public get serviceConfiguration(): IClientConfiguration {
         return this.details.serviceConfiguration;
     }
 
@@ -293,19 +291,15 @@ export class ReplayDocumentDeltaConnection
     }
 
     public submit(documentMessage: IDocumentMessage[]): void {
-        debug("dropping the outbound message");
-    }
-
-    public async submitAsync(documentMessage: IDocumentMessage[]): Promise<void> {
-        debug("dropping the outbound message and wait for response");
+        // ReplayDocumentDeltaConnection.submit() can't be called - client never sees its own join on,
+        // and thus can never move to sending ops.
+        throw new Error("ReplayDocumentDeltaConnection.submit() can't be called");
     }
 
     public async submitSignal(message: any) {
-        debug("dropping the outbound signal and wait for response");
     }
 
-    public disconnect() {
-        debug("no implementation for disconnect...");
+    public close() {
     }
 
     /**
@@ -324,11 +318,12 @@ export class ReplayDocumentDeltaConnection
         do {
             const fetchTo = controller.fetchTo(currentOp);
 
-            const fetchedOps = await documentStorageService.get(currentOp, fetchTo);
+            const { messages, partialResult } = await documentStorageService.get(currentOp, fetchTo);
 
-            if (fetchedOps.length === 0) {
+            if (messages.length === 0) {
                 // No more ops. But, they can show up later, either because document was just created,
                 // or because another client keeps submitting new ops.
+                assert(!partialResult);
                 if (controller.isDoneFetch(currentOp, undefined)) {
                     break;
                 }
@@ -337,10 +332,10 @@ export class ReplayDocumentDeltaConnection
             }
 
             replayPromiseChain = replayPromiseChain.then(
-                async () => controller.replay((ops) => this.emit("op", ReplayDocumentId, ops), fetchedOps));
+                async () => controller.replay((ops) => this.emit("op", ReplayDocumentId, ops), messages));
 
-            currentOp += fetchedOps.length;
-            done = controller.isDoneFetch(currentOp, fetchedOps[fetchedOps.length - 1].timestamp);
+            currentOp += messages.length;
+            done = controller.isDoneFetch(currentOp, messages[messages.length - 1].timestamp);
         } while (!done);
 
         return replayPromiseChain;

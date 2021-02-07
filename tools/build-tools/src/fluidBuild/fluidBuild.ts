@@ -4,7 +4,7 @@
  */
 
 import { commonOptions } from "../common/commonOptions";
-import { FluidRepo } from "./fluidRepo";
+import { FluidRepoBuild } from "./fluidRepoBuild";
 import { getResolvedFluidRoot } from "../common/fluidUtils";
 import { logStatus } from "../common/logging";
 import { Timer } from "../common/timer";
@@ -20,7 +20,7 @@ async function main() {
     const timer = new Timer(commonOptions.timer);
     const resolvedRoot = await getResolvedFluidRoot();
 
-    logStatus(`Processing ${resolvedRoot}`);
+    logStatus(`Fluid Repo Root: ${resolvedRoot}`);
 
     // Detect nohoist state mismatch and infer uninstall switch
     if (options.install) {
@@ -32,17 +32,17 @@ async function main() {
     }
 
     // Load the package
-    const repo = new FluidRepo(resolvedRoot, options.services);
+    const repo = new FluidRepoBuild(resolvedRoot, options.services);
     timer.time("Package scan completed");
 
-    // Set matched package based on options filter
-    const matched = repo.setMatched(options);
-    if (!matched) {
-        console.error("ERROR: No package matched");
-        process.exit(-4)
-    }
-
     try {
+        // Set matched package based on options filter
+        const matched = repo.setMatched(options);
+        if (!matched) {
+            console.error("ERROR: No package matched");
+            process.exit(-4)
+        }
+
         // Dependency checks
         if (options.depcheck) {
             repo.depcheck();
@@ -92,7 +92,7 @@ async function main() {
         await repo.checkPackages(options.fix);
         timer.time("Check scripts completed");
 
-        
+
         if (options.clean || options.build !== false) {
             logStatus(`Symlink in ${options.fullSymlink ? "full" : options.fullSymlink === false ? "isolated" : "non-dependent"} mode`);
 

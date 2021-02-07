@@ -35,7 +35,6 @@ const template = new Template({
 const innerDocKey = "innerDoc";
 
 export class TableView extends DataObject implements IFluidHTMLView {
-    // eslint-disable-next-line @typescript-eslint/no-use-before-define
     public static getFactory() { return factory; }
 
     public get IFluidHTMLView() { return this; }
@@ -53,8 +52,11 @@ export class TableView extends DataObject implements IFluidHTMLView {
     public render(elm: HTMLElement, options?: IFluidHTMLOptions): void {
         elm.append(this.templateRoot);
 
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const tableDocumentHandle = this.root.get<IFluidHandle<TableDocument>>(innerDocKey)!;
+
         // eslint-disable-next-line @typescript-eslint/no-floating-promises
-        this.root.get<IFluidHandle<TableDocument>>(innerDocKey).get().then((doc) => {
+        tableDocumentHandle.get().then((doc) => {
             const grid = template.get(this.templateRoot, "grid");
             const gridView = new GridView(doc, this);
             grid.appendChild(gridView.root);
@@ -105,5 +107,6 @@ const factory = new DataObjectFactory(
     [],
     {},
     [
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         [TableDocumentType, import("@fluid-example/table-document").then((m) => m.TableDocument.getFactory())],
     ]);

@@ -5,16 +5,12 @@
 
 import { strict as assert } from "assert";
 import { IRequest } from "@fluidframework/core-interfaces";
-import { IFluidCodeDetails, IProxyLoaderFactory, AttachState } from "@fluidframework/container-definitions";
+import { AttachState } from "@fluidframework/container-definitions";
 import { ConnectionState, Loader } from "@fluidframework/container-loader";
-import { IUrlResolver, IDocumentServiceFactory } from "@fluidframework/driver-definitions";
-import { LocalDocumentServiceFactory, LocalResolver } from "@fluidframework/local-driver";
 import { IFluidDataStoreContext } from "@fluidframework/runtime-definitions";
-import { ILocalDeltaConnectionServer, LocalDeltaConnectionServer } from "@fluidframework/server-local-server";
 import {
-    LocalCodeLoader,
+    ChannelFactoryRegistry,
     ITestFluidObject,
-    TestFluidObjectFactory,
 } from "@fluidframework/test-utils";
 import { SharedMap, SharedDirectory } from "@fluidframework/map";
 import { Deferred } from "@fluidframework/common-utils";
@@ -28,28 +24,47 @@ import { MergeTreeDeltaType } from "@fluidframework/merge-tree";
 import { MessageType, ISequencedDocumentMessage } from "@fluidframework/protocol-definitions";
 import { DataStoreMessageType } from "@fluidframework/datastore";
 import { ContainerMessageType } from "@fluidframework/container-runtime";
-import { requestFluidObject } from "@fluidframework/runtime-utils";
+import { convertContainerToDriverSerializedFormat, requestFluidObject } from "@fluidframework/runtime-utils";
+import {
+    generateTest,
+    generateNonCompatTest,
+    ITestContainerConfig,
+    DataObjectFactoryType,
+    ITestObjectProvider,
+} from "./compatUtils";
 
-describe("Detached Container", () => {
-    const documentId = "detachedContainerTest";
-    const pkg: IFluidCodeDetails = {
-        package: "detachedContainerTestPackage",
-        config: {},
-    };
+const detachedContainerRefSeqNumber = 0;
 
-    const sharedStringId = "ss1Key";
-    const sharedMapId = "sm1Key";
-    const crcId = "crc1Key";
-    const cocId = "coc1Key";
-    const sharedDirectoryId = "sd1Key";
-    const sharedCellId = "scell1Key";
-    const sharedMatrixId = "smatrix1Key";
-    const sharedInkId = "sink1Key";
-    const sparseMatrixId = "sparsematrixKey";
+const sharedStringId = "ss1Key";
+const sharedMapId = "sm1Key";
+const crcId = "crc1Key";
+const cocId = "coc1Key";
+const sharedDirectoryId = "sd1Key";
+const sharedCellId = "scell1Key";
+const sharedMatrixId = "smatrix1Key";
+const sharedInkId = "sink1Key";
+const sparseMatrixId = "sparsematrixKey";
 
+const registry: ChannelFactoryRegistry = [
+    [sharedStringId, SharedString.getFactory()],
+    [sharedMapId, SharedMap.getFactory()],
+    [crcId, ConsensusRegisterCollection.getFactory()],
+    [sharedDirectoryId, SharedDirectory.getFactory()],
+    [sharedCellId, SharedCell.getFactory()],
+    [sharedInkId, Ink.getFactory()],
+    [sharedMatrixId, SharedMatrix.getFactory()],
+    [cocId, ConsensusQueue.getFactory()],
+    [sparseMatrixId, SparseMatrix.getFactory()],
+];
+
+const testContainerConfig: ITestContainerConfig = {
+    fluidDataObjectType: DataObjectFactoryType.Test,
+    registry,
+};
+
+const tests = (argsFactory: () => ITestObjectProvider) => {
+    let args: ITestObjectProvider;
     let request: IRequest;
-    let testDeltaConnectionServer: ILocalDeltaConnectionServer;
-    let documentServiceFactory: IDocumentServiceFactory;
     let loader: Loader;
 
     const createFluidObject = (async (
@@ -61,45 +76,21 @@ describe("Detached Container", () => {
             "");
     });
 
-    function createTestLoader(urlResolver: IUrlResolver): Loader {
-        const factory: TestFluidObjectFactory = new TestFluidObjectFactory([
-            [sharedStringId, SharedString.getFactory()],
-            [sharedMapId, SharedMap.getFactory()],
-            [crcId, ConsensusRegisterCollection.getFactory()],
-            [sharedDirectoryId, SharedDirectory.getFactory()],
-            [sharedCellId, SharedCell.getFactory()],
-            [sharedInkId, Ink.getFactory()],
-            [sharedMatrixId, SharedMatrix.getFactory()],
-            [cocId, ConsensusQueue.getFactory()],
-            [sparseMatrixId, SparseMatrix.getFactory()],
-        ]);
-        const codeLoader = new LocalCodeLoader([[pkg, factory]]);
-        documentServiceFactory = new LocalDocumentServiceFactory(testDeltaConnectionServer);
-        return new Loader(
-            urlResolver,
-            documentServiceFactory,
-            codeLoader,
-            {},
-            {},
-            new Map<string, IProxyLoaderFactory>());
-    }
-
     beforeEach(async () => {
-        testDeltaConnectionServer = LocalDeltaConnectionServer.create();
-        const urlResolver = new LocalResolver();
-        request = urlResolver.createCreateNewRequest(documentId);
-        loader = createTestLoader(urlResolver);
+        args = argsFactory();
+        request  = args.driver.createCreateNewRequest(args.documentId);
+        loader = args.makeTestLoader(testContainerConfig) as Loader;
     });
 
     it("Create detached container", async () => {
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         assert.strictEqual(container.attachState, AttachState.Detached, "Container should be detached");
         assert.strictEqual(container.closed, false, "Container should be open");
         assert.strictEqual(container.deltaManager.inbound.length, 0, "Inbound queue should be empty");
-        assert.strictEqual(container.getQuorum().getMembers().size, 0, "Quorum should not contain any memebers");
+        assert.strictEqual(container.getQuorum().getMembers().size, 0, "Quorum should not contain any members");
         assert.strictEqual(container.connectionState, ConnectionState.Disconnected,
             "Container should be in disconnected state!!");
-        assert.strictEqual(container.chaincodePackage.package, pkg.package,
+        assert.strictEqual(container.chaincodePackage?.package, args.defaultCodeDetails.package,
             "Package should be same as provided");
         assert.strictEqual(container.id, "", "Detached container's id should be empty string");
         assert.strictEqual(container.clientDetails.capabilities.interactive, true,
@@ -107,16 +98,16 @@ describe("Detached Container", () => {
     });
 
     it("Attach detached container", async () => {
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         await container.attach(request);
         assert.strictEqual(container.attachState, AttachState.Attached, "Container should be attached");
         assert.strictEqual(container.closed, false, "Container should be open");
         assert.strictEqual(container.deltaManager.inbound.length, 0, "Inbound queue should be empty");
-        assert.strictEqual(container.id, documentId, "Doc id is not matching!!");
+        assert.strictEqual(container.id, args.documentId, "Doc id is not matching!!");
     });
 
     it("DataStores in detached container", async () => {
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         // Get the root dataStore from the detached container.
         const response = await container.request({ url: "/" });
         if (response.mimeType !== "fluid/object" && response.status !== 200) {
@@ -136,7 +127,7 @@ describe("Detached Container", () => {
     });
 
     it("DataStores in attached container", async () => {
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         // Get the root dataStore from the detached container.
         const response = await container.request({ url: "/" });
         const dataStore = response.value as ITestFluidObject;
@@ -148,7 +139,7 @@ describe("Detached Container", () => {
         // Now attach the container
         await container.attach(request);
 
-        assert.strictEqual(testDataStore.runtime.IFluidHandleContext.isAttached, true,
+        assert(testDataStore.runtime.attachState !== AttachState.Detached,
             "DataStore should be attached!!");
 
         // Get the sub dataStore's "root" channel and verify that it is attached.
@@ -159,7 +150,7 @@ describe("Detached Container", () => {
     });
 
     it("Load attached container and check for dataStores", async () => {
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         // Get the root dataStore from the detached container.
         const response = await container.request({ url: "/" });
         const dataStore = response.value as ITestFluidObject;
@@ -172,41 +163,47 @@ describe("Detached Container", () => {
         await container.attach(request);
 
         // Now load the container from another loader.
-        const urlResolver2 = new LocalResolver();
-        const loader2 = createTestLoader(urlResolver2);
+        const loader2 = args.makeTestLoader(testContainerConfig);
         // Create a new request url from the resolvedUrl of the first container.
-        const requestUrl2 = await urlResolver2.getAbsoluteUrl(container.resolvedUrl, "");
+        assert(container.resolvedUrl);
+        const requestUrl2 = await args.urlResolver.getAbsoluteUrl(container.resolvedUrl, "");
         const container2 = await loader2.resolve({ url: requestUrl2 });
 
         // Get the sub dataStore and assert that it is attached.
         const response2 = await container2.request({ url: `/${subDataStore1.context.id}` });
         const subDataStore2 = response2.value as ITestFluidObject;
-        assert.strictEqual(subDataStore2.runtime.IFluidHandleContext.isAttached, true,
+        assert(subDataStore2.runtime.attachState !== AttachState.Detached,
             "DataStore should be attached!!");
 
         // Verify the attributes of the root channel of both sub dataStores.
         const testChannel1 = await subDataStore1.runtime.getChannel("root");
         const testChannel2 = await subDataStore2.runtime.getChannel("root");
         assert.strictEqual(testChannel2.isAttached(), true, "Channel should be attached!!");
-        assert.strictEqual(JSON.stringify(testChannel2.snapshot()), JSON.stringify(testChannel1.snapshot()),
-            "Value for snapshot should be same!!");
         assert.strictEqual(testChannel2.isAttached(), testChannel1.isAttached(),
             "Value for isAttached should persist!!");
+
+        // back-compat for N-2 <= 0.29, remove the else part when N-2 >= 0.30
+        if (testChannel1.summarize && testChannel2.summarize) {
+            assert.strictEqual(JSON.stringify(testChannel2.summarize()), JSON.stringify(testChannel1.summarize()),
+                "Value for summarize should be same!!");
+        } else {
+            assert.strictEqual(
+                JSON.stringify((testChannel2 as SharedMap).snapshot()),
+                JSON.stringify((testChannel1 as SharedMap).snapshot()),
+                "Value for summarize should be same!!");
+        }
     });
 
     it("ReAttach detached container on failed attach", async () => {
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        const oldFunc = documentServiceFactory.createContainer;
-        // eslint-disable-next-line @typescript-eslint/unbound-method
-        documentServiceFactory.createContainer = (a, b, c) => { throw new Error("Test Error"); };
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
+        const oldFunc = args.documentServiceFactory.createContainer;
+        args.documentServiceFactory.createContainer = (a, b, c) => { throw new Error("Test Error"); };
         let failedOnce = false;
         try {
             await container.attach(request);
         } catch (e) {
             failedOnce = true;
-            // eslint-disable-next-line @typescript-eslint/unbound-method
-            documentServiceFactory.createContainer = oldFunc;
+            args.documentServiceFactory.createContainer = oldFunc;
         }
         assert.strictEqual(failedOnce, true, "Attach call should fail");
         assert.strictEqual(container.attachState, AttachState.Attaching, "Container should be in attaching state");
@@ -230,10 +227,10 @@ describe("Detached Container", () => {
         await defP.promise;
 
         // Now load the container from another loader.
-        const urlResolver2 = new LocalResolver();
-        const loader2 = createTestLoader(urlResolver2);
+        const loader2 = args.makeTestLoader(testContainerConfig);
         // Create a new request url from the resolvedUrl of the first container.
-        const requestUrl2 = await urlResolver2.getAbsoluteUrl(container.resolvedUrl, "");
+        assert(container.resolvedUrl);
+        const requestUrl2 = await args.urlResolver.getAbsoluteUrl(container.resolvedUrl, "");
         const container2 = await loader2.resolve({ url: requestUrl2 });
 
         // Get the sub data store and assert that it is attached.
@@ -244,11 +241,35 @@ describe("Detached Container", () => {
         assert.strictEqual(dataStore2.runtime.attachState, AttachState.Attached, "Data store 2 should be attached");
     });
 
+    it("Directly attach container through service factory, should resolve to same container", async () => {
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
+        // Get the root dataStore from the detached container.
+        const response = await container.request({ url: "/" });
+        const dataStore = response.value as ITestFluidObject;
+
+        // Create a sub dataStore of type TestFluidObject.
+        const subDataStore1 = await createFluidObject(dataStore.context, "default");
+        dataStore.root.set("attachKey", subDataStore1.handle);
+
+        const snapshotTree = container.serialize();
+        const summaryForAttach = convertContainerToDriverSerializedFormat(snapshotTree);
+        const resolvedUrl = await args.urlResolver.resolve(request);
+        assert(resolvedUrl);
+        const service = await args.documentServiceFactory.createContainer(summaryForAttach as any, resolvedUrl);
+        const absoluteUrl = await args.urlResolver.getAbsoluteUrl(service.resolvedUrl, "/");
+
+        const container2 = await loader.resolve({ url: absoluteUrl });
+        // Get the root dataStore from the detached container.
+        const response2 = await container2.request({ url: "/" });
+        const dataStore2 = response2.value as ITestFluidObject;
+        assert.strictEqual(dataStore2.root.get("attachKey").absolutePath, subDataStore1.handle.absolutePath,
+            "Stored handle should match!!");
+    });
+
     it("Fire ops during container attach for shared string", async () => {
         const ops = { pos1: 0, seg: "b", type: 0 };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.equal(type, MessageType.Operation);
             assert.equal(contents.type, ContainerMessageType.FluidDataStoreOp);
@@ -282,8 +303,7 @@ describe("Detached Container", () => {
     it("Fire ops during container attach for shared map", async () => {
         const ops = { key: "1", type: "set", value: { type: "Plain", value: "b" } };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sharedMapId, "Address should be shared map");
@@ -312,8 +332,7 @@ describe("Detached Container", () => {
     it("Fire channel attach ops during container attach", async () => {
         const testChannelId = "testChannel1";
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.id,
                 testChannelId, "Channel id should match");
@@ -341,7 +360,7 @@ describe("Detached Container", () => {
     it("Fire dataStore attach ops during container attach", async () => {
         const testDataStoreType = "default";
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
 
         // Get the root dataStore from the detached container.
         const response = await container.request({ url: "/" });
@@ -351,7 +370,6 @@ describe("Detached Container", () => {
         const router = await dataStore.context.containerRuntime.createDataStore([testDataStoreType]);
         const comp2 = await requestFluidObject<ITestFluidObject>(router, "/");
 
-        // eslint-disable-next-line @typescript-eslint/unbound-method
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(type, MessageType.Operation, "Op should be an attach op");
             assert.strictEqual(contents.type, ContainerMessageType.Attach, "Op should be an attach op");
@@ -370,10 +388,14 @@ describe("Detached Container", () => {
     });
 
     it("Fire ops during container attach for consensus register collection", async () => {
-        const op = { key: "1", type: "write", serializedValue: JSON.stringify("b"), refSeq: 0 };
+        const op = {
+            key: "1",
+            type: "write",
+            serializedValue: JSON.stringify("b"),
+            refSeq: detachedContainerRefSeqNumber,
+        };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 crcId, "Address should be consensus register collection");
@@ -407,8 +429,7 @@ describe("Detached Container", () => {
             value: { type: "Plain", value: "b" },
         };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sharedDirectoryId, "Address should be shared directory");
@@ -436,8 +457,7 @@ describe("Detached Container", () => {
     it("Fire ops during container attach for shared cell", async () => {
         const op = { type: "setCell", value: { type: "Plain", value: "b" } };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sharedCellId, "Address should be shared directory");
@@ -464,8 +484,7 @@ describe("Detached Container", () => {
 
     it("Fire ops during container attach for shared ink", async () => {
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sharedInkId, "Address should be ink");
@@ -498,8 +517,7 @@ describe("Detached Container", () => {
     it("Fire ops during container attach for consensus ordered collection", async () => {
         const op = { opName: "add", value: JSON.stringify("s") };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 cocId, "Address should be consensus queue");
@@ -529,8 +547,7 @@ describe("Detached Container", () => {
     it("Fire ops during container attach for sparse matrix", async () => {
         const seg = { items: ["s"] };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sparseMatrixId, "Address should be sparse matrix");
@@ -565,8 +582,7 @@ describe("Detached Container", () => {
     it.skip("Fire ops during container attach for shared matrix", async () => {
         const op = { pos1: 0, seg: 9, type: 0, target: "rows" };
         const defPromise = new Deferred();
-        const container = await loader.createDetachedContainer(pkg);
-        // eslint-disable-next-line @typescript-eslint/unbound-method
+        const container = await loader.createDetachedContainer(args.defaultCodeDetails);
         container.deltaManager.submit = (type, contents, batch, metadata) => {
             assert.strictEqual(contents.contents.contents.content.address,
                 sharedMatrixId, "Address should be shared matrix");
@@ -592,8 +608,34 @@ describe("Detached Container", () => {
         await containerP;
         await defPromise.promise;
     });
+};
 
-    afterEach(async () => {
-        await testDeltaConnectionServer.webSocketServer.close();
+describe("Detached Container", () => {
+    generateTest(tests);
+
+    // non compat test
+    generateNonCompatTest((argsFactory: () => ITestObjectProvider) => {
+        let args: ITestObjectProvider;
+        let request: IRequest;
+        let loader: Loader;
+
+        beforeEach(async () => {
+            args = argsFactory();
+            request = (args.driver ?? getFluidTestDriver()).createCreateNewRequest(args.documentId);
+            loader = args.makeTestLoader(testContainerConfig) as Loader;
+        });
+
+        it("Load attached container from cache and check if they are same", async () => {
+            const container = await loader.createDetachedContainer(args.defaultCodeDetails);
+
+            // Now attach the container and get the sub dataStore.
+            await container.attach(request);
+
+            // Create a new request url from the resolvedUrl of the first container.
+            assert(container.resolvedUrl);
+            const requestUrl2 = await args.urlResolver.getAbsoluteUrl(container.resolvedUrl, "");
+            const container2 = await loader.resolve({ url: requestUrl2 });
+            assert.strictEqual(container, container2, "Both containers should be same");
+        });
     });
 });

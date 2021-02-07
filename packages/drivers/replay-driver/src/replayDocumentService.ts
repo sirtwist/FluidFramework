@@ -18,9 +18,7 @@ export class ReplayDocumentService implements api.IDocumentService {
     public static async create(
         documentService: api.IDocumentService,
         controller: ReplayController): Promise<api.IDocumentService> {
-        const storage = await documentService.connectToStorage();
-
-        const useController = await controller.initStorage(storage);
+        const useController = await controller.initStorage(documentService);
         if (!useController) {
             return documentService;
         }
@@ -65,10 +63,6 @@ export class ReplayDocumentService implements api.IDocumentService {
      */
     public async connectToDeltaStream(client: IClient): Promise<api.IDocumentDeltaConnection> {
         return this.deltaStorage;
-    }
-
-    public async branch(): Promise<string> {
-        return Promise.reject("Invalid operation");
     }
 
     public getErrorTrackingService() {

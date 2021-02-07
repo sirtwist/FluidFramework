@@ -11,11 +11,11 @@ import {
     IRequest,
     IResponse,
     IFluidHandle,
+    IFluidCodeDetails,
 } from "@fluidframework/core-interfaces";
-import { FluidDataStoreRuntime, FluidObjectHandle } from "@fluidframework/datastore";
+import { FluidObjectHandle, mixinRequestHandler } from "@fluidframework/datastore";
 import {
     IContainerContext,
-    IFluidCodeDetails,
     IRuntime,
     IRuntimeFactory,
 } from "@fluidframework/container-definitions";
@@ -32,10 +32,10 @@ import {
 } from "@fluidframework/runtime-definitions";
 import { IFluidHTMLOptions, IFluidHTMLView } from "@fluidframework/view-interfaces";
 import {
-    deprecated_innerRequestHandler,
+    innerRequestHandler,
     buildRuntimeRequestHandler,
 } from "@fluidframework/request-handler";
-import { defaultRouteRequestHandler } from "@fluidframework/aqueduct";
+import { defaultFluidObjectRequestHandler, defaultRouteRequestHandler } from "@fluidframework/aqueduct";
 import Axios from "axios";
 
 import * as scribe from "./tools-core";
@@ -44,7 +44,7 @@ import * as scribe from "./tools-core";
 // eslint-disable-next-line @typescript-eslint/no-require-imports, import/no-internal-modules, import/no-unassigned-import
 require("bootstrap/dist/css/bootstrap.min.css");
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+// eslint-disable-next-line @typescript-eslint/no-require-imports,@typescript-eslint/no-var-requires
 const pkgVersion = require("../package.json").version;
 const version = `${pkgVersion.endsWith(".0") ? "^" : ""}${pkgVersion}`;
 
@@ -400,23 +400,16 @@ export class Scribe
     public get IFluidRouter() { return this; }
     public get IFluidHTMLView() { return this; }
 
-    public url: string;
     private root: ISharedMap;
     private div: HTMLDivElement;
 
     constructor(private readonly runtime: IFluidDataStoreRuntime, private readonly context: IFluidDataStoreContext) {
         super();
-
-        this.url = context.id;
-        this.innerHandle = new FluidObjectHandle(this, this.url, this.runtime.IFluidHandleContext);
+        this.innerHandle = new FluidObjectHandle(this, "", this.runtime.objectsRoutingContext);
     }
 
     public async request(request: IRequest): Promise<IResponse> {
-        return {
-            mimeType: "fluid/object",
-            status: 200,
-            value: this,
-        };
+        return defaultFluidObjectRequestHandler(this, request);
     }
 
     public render(elm: HTMLElement, options?: IFluidHTMLOptions): void {
@@ -428,7 +421,7 @@ export class Scribe
                 this.context,
                 this.runtime,
                 this.root,
-                "https://www.wu2.prague.office-int.com/public/literature/resume.txt",
+                "https://www.r11s-wu2-ppe.prague.office-int.com/public/literature/resume.txt",
                 50,
                 1,
                 "");
@@ -470,7 +463,7 @@ class ScribeFactory implements IFluidDataStoreFactory, IRuntimeFactory {
             registry,
             buildRuntimeRequestHandler(
                 defaultRouteRequestHandler(defaultComponentId),
-                deprecated_innerRequestHandler,
+                innerRequestHandler,
             ),
             { generateSummaries: true });
 
@@ -487,16 +480,14 @@ class ScribeFactory implements IFluidDataStoreFactory, IRuntimeFactory {
         const mapFactory = SharedMap.getFactory();
         dataTypes.set(mapFactory.type, mapFactory);
 
-        const runtime = FluidDataStoreRuntime.load(
-            context,
-            dataTypes,
-        );
+        const runtimeClass = mixinRequestHandler(
+            async (request: IRequest) => {
+                const router = await routerP;
+                return router.request(request);
+            });
 
-        const progressCollectionP = Scribe.load(runtime, context);
-        runtime.registerRequestHandler(async (request: IRequest) => {
-            const progressCollection = await progressCollectionP;
-            return progressCollection.request(request);
-        });
+        const runtime = new runtimeClass(context, dataTypes);
+        const routerP = Scribe.load(runtime, context);
 
         return runtime;
     }

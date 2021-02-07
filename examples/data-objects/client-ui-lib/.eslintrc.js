@@ -5,8 +5,11 @@
 
 module.exports = {
     "extends": [
-        "@fluidframework/eslint-config-fluid"
+        "@fluidframework/eslint-config-fluid/eslint7"
     ],
+    "parserOptions": {
+        "project": ["./tsconfig.json", "./src/test/tsconfig.json"]
+    },
     "rules": {
         "@typescript-eslint/consistent-type-assertions": "off",
         "@typescript-eslint/no-use-before-define": "off",

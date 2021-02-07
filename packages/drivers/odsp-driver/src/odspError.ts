@@ -3,121 +3,21 @@
  * Licensed under the MIT License.
  */
 
-import {
-    NetworkErrorBasic,
-    GenericNetworkError,
-    NonRetryableError,
-    AuthorizationError,
-    isOnline,
-    createGenericNetworkError,
-    OnlineStatus,
-} from "@fluidframework/driver-utils";
-import {
-    DriverError,
-    DriverErrorType,
-} from "@fluidframework/driver-definitions";
+import { createOdspNetworkError } from "@fluidframework/odsp-doclib-utils";
 import { IOdspSocketError } from "./contracts";
 import { parseAuthErrorClaims } from "./parseAuthErrorClaims";
 
-export const offlineFetchFailureStatusCode: number = 709;
-export const fetchFailureStatusCode: number = 710;
-// Status code for invalid file name error in odsp driver.
-export const invalidFileNameStatusCode: number = 711;
-// no response, or can't parse response
-export const fetchIncorrectResponse = 712;
+const nullToUndefined = (a: string | null) => a ?? undefined;
 
-export enum OdspErrorType {
-    /**
-     * Storage is out of space
-     */
-    outOfStorageError = "outOfStorageError",
-
-    /**
-     * Invalid file name (at creation of the file)
-     */
-    invalidFileNameError = "invalidFileNameError",
-
-    /**
-     * Snapshot is too big. Host application specified limit for snapshot size, and snapshot was bigger
-     * that that limit, thus request failed. Hosting application is expected to have fall-back behavior for
-     * such case.
-     */
-    snapshotTooBig = "snapshotTooBig",
-
-    /*
-        * SPO admin toggle: fluid service is not enabled.
-        */
-    fluidNotEnabled = "fluidNotEnabled",
-}
-
-/**
- * Base interface for all errors and warnings
- */
-export interface IOdspError {
-    readonly errorType: OdspErrorType;
-    readonly message: string;
-    canRetry: boolean;
-    online?: string;
-}
-
-export type OdspError =
-    | DriverError
-    | IOdspError;
-
-export function createOdspNetworkError(
-    errorMessage: string,
-    statusCode?: number,
-    retryAfterSeconds?: number,
-    claims?: string,
-): OdspError {
-    let error: OdspError;
-
-    switch (statusCode) {
-        case 400:
-            error = new GenericNetworkError(errorMessage, false, statusCode);
-            break;
-        case 401:
-        case 403:
-            error = new AuthorizationError(errorMessage, claims);
-            break;
-        case 404:
-            error = new NetworkErrorBasic(errorMessage, DriverErrorType.fileNotFoundOrAccessDeniedError, false);
-            break;
-        case 406:
-            error = new NetworkErrorBasic(errorMessage, DriverErrorType.unsupportedClientProtocolVersion, false);
-            break;
-        case 413:
-            error = new NonRetryableError(errorMessage, OdspErrorType.snapshotTooBig);
-            break;
-        case 414:
-        case invalidFileNameStatusCode:
-            error = new NonRetryableError(errorMessage, OdspErrorType.invalidFileNameError);
-            break;
-        case 500:
-            error = new GenericNetworkError(errorMessage, true);
-            break;
-        case 501:
-            error = new NonRetryableError(errorMessage, OdspErrorType.fluidNotEnabled);
-            break;
-        case 507:
-            error = new NonRetryableError(errorMessage, OdspErrorType.outOfStorageError);
-            break;
-        case offlineFetchFailureStatusCode:
-            error = new NetworkErrorBasic(errorMessage, DriverErrorType.offlineError, true);
-            break;
-        case fetchFailureStatusCode:
-            error = new NetworkErrorBasic(errorMessage, DriverErrorType.fetchFailure, true);
-            break;
-        case fetchIncorrectResponse:
-            error = new NetworkErrorBasic(errorMessage, DriverErrorType.incorrectServerResponse, false);
-            break;
-        default:
-            error = createGenericNetworkError(errorMessage, true, retryAfterSeconds, statusCode);
+function numberFromHeader(header: string | null): number | undefined {
+    if (header === null) {
+        return undefined;
     }
-
-    error.online = OnlineStatus[isOnline()];
-
-    return error;
+    const n = Number(header);
+    if (Number.isNaN(n)) {
+        return undefined;
+    }
+    return n;
 }
 
 /**
@@ -127,26 +27,38 @@ export function throwOdspNetworkError(
     errorMessage: string,
     statusCode: number,
     response?: Response,
-) {
+    responseText?: string,
+): never {
     const claims = statusCode === 401 && response?.headers ? parseAuthErrorClaims(response.headers) : undefined;
 
     const networkError = createOdspNetworkError(
-        response ? `${errorMessage}, msg = ${response.statusText}, type = ${response.type}` : errorMessage,
+        response && response.statusText !== "" ? `${errorMessage} (${response.statusText})` : errorMessage,
         statusCode,
-        undefined /* retryAfterSeconds */,
+        response ? numberFromHeader(response.headers.get("retry-after")) : undefined, // seconds
         claims);
 
-    (networkError as any).sprequestguid = response?.headers ? `${response.headers.get("sprequestguid")}` : undefined;
+    const errorAsAny = networkError as any;
 
+    errorAsAny.response = responseText;
+    if (response) {
+        errorAsAny.type = response.type;
+        if (response.headers) {
+            errorAsAny.sprequestguid = nullToUndefined(response.headers.get("sprequestguid"));
+            errorAsAny.serverEpoch = nullToUndefined(response.headers.get("x-fluid-epoch"));
+        }
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-throw-literal
     throw networkError;
 }
 
 /**
  * Returns network error based on error object from ODSP socket (IOdspSocketError)
  */
-export function errorObjectFromSocketError(socketError: IOdspSocketError) {
+export function errorObjectFromSocketError(socketError: IOdspSocketError, handler: string) {
+    const message = `socket.io: ${handler}: ${socketError.message}`;
     return createOdspNetworkError(
-        socketError.message,
+        message,
         socketError.code,
         socketError.retryAfter,
         // TODO: When long lived token is supported for websocket then IOdspSocketError need to support

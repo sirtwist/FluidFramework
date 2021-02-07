@@ -20,6 +20,7 @@ parameters:
   type: string
 
 variables:
+- group: prague-key-vault
 - name: skipComponentGovernanceDetection
   value: true
 - name: shouldPublish
@@ -31,7 +32,7 @@ variables:
       ),
       or(
         and(
-          eq(parameters.buildNumberInPatch, false),
+          ne(parameters.buildNumberInPatch, true),
           startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')
         ),
         eq(variables['Build.SourceBranch'], 'refs/heads/main')
@@ -47,7 +48,7 @@ variables:
           eq(variables['Build.SourceBranch'], 'refs/heads/main')
         ),
         and(
-          eq(parameters.buildNumberInPatch, false),
+          ne(parameters.buildNumberInPatch, true),
           startsWith(variables['Build.SourceBranch'], 'refs/heads/release/')
         )
       )
@@ -66,7 +67,7 @@ variables:
 - name: pushImage
   value: ${{ variables.publish }}
 - name: releaseImage
-  value: ${{ 
+  value: ${{
     and(
       eq(variables.pushImage, true),
       eq(parameters.releaseImage, true)

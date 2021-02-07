@@ -3,21 +3,26 @@
  * Licensed under the MIT License.
  */
 
-import { EventEmitter } from "events";
-import { IPartitionLambda, IPartitionLambdaFactory, IQueuedMessage } from "@fluidframework/server-services-core";
+import {
+    IContextErrorData,
+    IPartitionLambda,
+    IPartitionLambdaFactory,
+    IQueuedMessage,
+    LambdaCloseType,
+} from "@fluidframework/server-services-core";
 import { AsyncQueue, queue } from "async";
 import * as _ from "lodash";
 import { Provider } from "nconf";
 import * as winston from "winston";
 import { DocumentContext } from "./documentContext";
 
-export class DocumentPartition extends EventEmitter {
+export class DocumentPartition {
     private readonly q: AsyncQueue<IQueuedMessage>;
     private readonly lambdaP: Promise<IPartitionLambda>;
     private lambda: IPartitionLambda;
     private corrupt = false;
-    private activityTimer: NodeJS.Timeout | undefined;
     private closed = false;
+    private activityTimeoutTime: number;
 
     constructor(
         factory: IPartitionLambdaFactory,
@@ -26,7 +31,7 @@ export class DocumentPartition extends EventEmitter {
         documentId: string,
         public readonly context: DocumentContext,
         private readonly activityTimeout: number) {
-        super();
+        this.updateActivityTime();
 
         // Default to the git tenant if not specified
         const clonedConfig = _.cloneDeep((config as any).get());
@@ -48,7 +53,7 @@ export class DocumentPartition extends EventEmitter {
                     // TODO dead letter queue for bad messages, etc... when the lambda is throwing an exception
                     // for now we will simply continue on to keep the queue flowing
                     winston.error("Error processing partition message", error);
-                    context.error(error, false);
+                    context.error(error, { restart: false, tenantId, documentId });
                     this.corrupt = true;
                 }
 
@@ -58,23 +63,23 @@ export class DocumentPartition extends EventEmitter {
             1);
         this.q.pause();
 
-        this.context.on("error", (error: any, restart: boolean) => {
-            if (restart) {
+        this.context.on("error", (error: any, errorData: IContextErrorData) => {
+            if (errorData.restart) {
                 // ensure no more messages are processed by this partition
                 // while the process is restarting / closing
-                this.close();
+                this.close(LambdaCloseType.Error);
             }
         });
 
         // Create the lambda to handle the document messages
-        this.lambdaP = factory.create(documentConfig, context);
+        this.lambdaP = factory.create(documentConfig, context, this.updateActivityTime.bind(this));
         this.lambdaP.then(
             (lambda) => {
                 this.lambda = lambda;
                 this.q.resume();
             },
             (error) => {
-                context.error(error, true);
+                context.error(error, { restart: true, tenantId, documentId });
                 this.q.kill();
             });
     }
@@ -85,29 +90,25 @@ export class DocumentPartition extends EventEmitter {
         }
 
         this.q.push(message);
-        this.updateActivityTimer();
+        this.updateActivityTime();
     }
 
-    public close() {
+    public close(closeType: LambdaCloseType) {
         if (this.closed) {
             return;
         }
 
         this.closed = true;
 
-        this.clearActivityTimer();
-
-        this.removeAllListeners();
-
         // Stop any future processing
         this.q.kill();
 
         if (this.lambda) {
-            this.lambda.close();
+            this.lambda.close(closeType);
         } else {
             this.lambdaP.then(
                 (lambda) => {
-                    lambda.close();
+                    lambda.close(closeType);
                 },
                 (error) => {
                     // Lambda was never created - ignoring
@@ -115,18 +116,11 @@ export class DocumentPartition extends EventEmitter {
         }
     }
 
-    private updateActivityTimer() {
-        this.clearActivityTimer();
-
-        this.activityTimer = setTimeout(() => {
-            this.emit("inactive");
-        }, this.activityTimeout);
+    public isInactive(now: number = Date.now()) {
+        return now > this.activityTimeoutTime;
     }
 
-    private clearActivityTimer() {
-        if (this.activityTimer !== undefined) {
-            clearTimeout(this.activityTimer);
-            this.activityTimer = undefined;
-        }
+    private updateActivityTime() {
+        this.activityTimeoutTime = Date.now() + this.activityTimeout;
     }
 }

@@ -3,12 +3,13 @@
  * Licensed under the MIT License.
  */
 
+import { ITelemetryLogger } from "@fluidframework/common-definitions";
 import { IDocumentService, IResolvedUrl } from "@fluidframework/driver-definitions";
 import { IErrorTrackingService } from "@fluidframework/protocol-definitions";
 import { ICredentials } from "@fluidframework/server-services-client";
 import { DocumentService2 } from "./documentService2";
 import { DefaultErrorTracking } from "./errorTracking";
-import { TokenProvider } from "./tokens";
+import { ITokenProvider } from "./tokens";
 
 /**
  * Returns the document service associated with the factory.
@@ -21,12 +22,13 @@ export const createDocumentService2 = (
     ordererUrl: string,
     deltaStorageUrl: string,
     gitUrl: string,
-    tokenProvider: TokenProvider,
+    tokenProvider: ITokenProvider,
     tenantId: string,
     documentId: string,
     errorTracking: IErrorTrackingService = new DefaultErrorTracking(),
     disableCache = false,
     historianApi = true,
+    logger: ITelemetryLogger,
     credentials?: ICredentials): IDocumentService => new DocumentService2(
         resolvedUrl,
         ordererUrl,
@@ -36,6 +38,7 @@ export const createDocumentService2 = (
         disableCache,
         historianApi,
         credentials,
+        logger,
         tokenProvider,
         tenantId,
         documentId);

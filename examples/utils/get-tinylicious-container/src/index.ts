@@ -4,3 +4,5 @@
  */
 
 export * from "./getTinyliciousContainer";
+export * from "./getContainer";
+export { InsecureTinyliciousUrlResolver } from "@fluidframework/tinylicious-driver";

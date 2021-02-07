@@ -53,7 +53,7 @@ Container is returned as result of Loader.resolve() call. Loader can cache conta
 
 ### Connectivity
 
-Usually container is returned when state of container (and data stores) is rehydrated from snapshot. Unless `IRequest.headers.pause` is specified, connection to ordering service will be established at some point (asynchronously) and latest Ops would be processed, allowing local changes to flow form client to server. `Container.connected` indicates whether connection to ordering service is established, and  [Connectivity events](#Connectivity-events) are notifying about connectivity changes.
+Usually container is returned when state of container (and data stores) is rehydrated from snapshot. Unless `IRequest.headers.pause` is specified, connection to ordering service will be established at some point (asynchronously) and latest Ops would be processed, allowing local changes to flow form client to server. `Container.connected` indicates whether connection to ordering service is established, and  [Connectivity events](#Connectivity-events) are notifying about connectivity changes. While it's highly recommended for listeners to check initial state at the moment they register for connectivity events, new listeners are called on registration to propagate current state. I.e. if container is disconnected when both "connected" & "disconnected" listeners are installed, newly installed listener for "disconnected" event will be called on registration.
 
 ### Closure
 
@@ -159,7 +159,7 @@ This value is not affected by `Container.forceReadonly` calls discussed below an
 
 Hosts can also force readonly-mode for a container via calling `Container.forceReadonly(true)`. This can be useful in scenarios like:
 
-- Loss of connectivity, in scenarios where host choses method od preventing user edits over (or in addition to) showing disconnected UX and warning user of potential data loss on closure of container
+- Loss of connectivity, in scenarios where host choses method of preventing user edits over (or in addition to) showing disconnected UX and warning user of potential data loss on closure of container
 - Special view-only mode in host. For example can be used by hosts for previewing container content in-place with other host content, and leveraging full-screen / separate window experience for editing.
 
 Container and DeltaManager expose `"readonly"` event and property. It can have 3 states:

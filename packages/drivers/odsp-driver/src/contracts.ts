@@ -23,14 +23,27 @@ export interface IOdspResolvedUrl extends IFluidResolvedUrl {
 
     endpoints: {
         snapshotStorageUrl: string;
+        attachmentPOSTStorageUrl: string;
+        attachmentGETStorageUrl: string;
     };
 
     // Tokens are not obtained by the ODSP driver using the resolve flow, the app must provide them.
+    // eslint-disable-next-line @typescript-eslint/ban-types
     tokens: {};
 
     fileName: string;
 
     summarizer: boolean;
+
+    // This is used to save the network calls while doing trees/latest call as if the client does not have permission
+    // then this link can be redeemed for the permissions in the same network call.
+    sharingLinkToRedeem?: string;
+
+    codeHint?: {
+        // containerPackageName is used for adding the package name to the request headers.
+        // This may be used for preloading the container package when loading Fluid content.
+        containerPackageName?: string
+    }
 }
 
 /**
@@ -48,10 +61,23 @@ export interface ISocketStorageDiscovery {
     snapshotStorageUrl: string;
     deltaStorageUrl: string;
 
+    /**
+     * The non-AFD URL
+     */
     deltaStreamSocketUrl: string;
 
-    // The AFD URL for PushChannel
+    /**
+     * The AFD URL for PushChannel
+     */
     deltaStreamSocketUrl2?: string;
+
+    /**
+     * The access token for PushChannel. Optionally returned, depending on implementation.
+     * OneDrive for Consumer implementation returns it and OneDrive for Business implementation
+     * does not return it and instead expects token to be returned via `getWebsocketToken` callback
+     * passed as a parameter to `OdspDocumentService.create()` factory.
+     */
+    socketToken?: string;
 }
 
 /**
@@ -107,7 +133,8 @@ export enum SnapshotType {
 export interface ISnapshotRequest {
     type: SnapshotType;
     message: string;
-    sequenceNumber: number;
+    // Server only looks at it when the Snapshot type is "container".
+    sequenceNumber?: number;
     entries: SnapshotTreeEntry[];
 }
 
@@ -119,12 +146,13 @@ export type SnapshotTreeEntry = ISnapshotTreeValueEntry | ISnapshotTreeHandleEnt
 
 export interface ISnapshotTreeBaseEntry {
     path: string;
-    type: string;
+    type: "blob" | "tree" | "commit";
 }
 
 export interface ISnapshotTreeValueEntry extends ISnapshotTreeBaseEntry {
-    id?: string;
     value: SnapshotTreeValue;
+    // Indicates that this tree entry is unreferenced. If this is not present, the tree entry is considered referenced.
+    unreferenced?: true;
 }
 
 export interface ISnapshotTreeHandleEntry extends ISnapshotTreeBaseEntry {
@@ -134,16 +162,18 @@ export interface ISnapshotTreeHandleEntry extends ISnapshotTreeBaseEntry {
 export type SnapshotTreeValue = ISnapshotTree | ISnapshotBlob | ISnapshotCommit;
 
 export interface ISnapshotTree {
+    type: "tree";
     entries?: SnapshotTreeEntry[];
 }
 
 export interface ISnapshotBlob {
-    contents?: string;
-    content?: string;
-    encoding: string;
+    type: "blob";
+    content: string;
+    encoding: "base64" | "utf-8";
 }
 
 export interface ISnapshotCommit {
+    type: "commit";
     content: string;
 }
 
@@ -160,11 +190,13 @@ export interface ITree {
 }
 
 /**
- * Blob content
+ * Blob content, represents blobs in downloaded snapshot.
  */
 export interface IBlob {
     content: string;
-    encoding: string;
+    // SPO only uses "base64" today for download.
+    // We are adding undefined too, as temp way to roundtrip strings unchanged.
+    encoding: "base64" | undefined;
     id: string;
     size: number;
 }
@@ -192,6 +224,13 @@ export interface ISnapshotOptions {
      * if snapshot is bigger in size than specified limit.
      */
     mds?: number;
+
+    /*
+     * Maximum time limit to fetch snapshot (in seconds)
+     * If specified, client will timeout the fetch request if it exceeds the time limit and
+     * will try to fetch the snapshot without blobs.
+     */
+    timeout?: number;
 }
 
 export interface HostStoragePolicy {
@@ -224,4 +263,35 @@ export interface ICreateFileResponse {
     itemId: string;
     itemUrl: string;
     sequenceNumber: number;
+}
+
+export interface OdspDocumentInfo {
+    siteUrl: string;
+    driveId: string;
+    fileId: string;
+    dataStorePath: string;
+}
+
+export interface OdspFluidDataStoreLocator {
+    siteUrl: string;
+    driveId: string;
+    fileId: string;
+    dataStorePath: string;
+    appName?: string;
+    containerPackageName?: string;
+}
+
+export enum SharingLinkHeader {
+    // Can be used in request made to resolver, to tell the resolver that the passed in URL is a sharing link
+    // which can be redeemed at server to get permissions.
+    isSharingLinkToRedeem = "isSharingLinkToRedeem",
+}
+
+export interface ISharingLinkHeader {
+    [SharingLinkHeader.isSharingLinkToRedeem]: boolean;
+}
+
+declare module "@fluidframework/core-interfaces" {
+    // eslint-disable-next-line @typescript-eslint/no-empty-interface
+    export interface IRequestHeader extends Partial<ISharingLinkHeader> { }
 }

@@ -5,7 +5,7 @@
 
 /* eslint-disable no-bitwise */
 
-import { strict as assert } from "assert";
+import { assert } from "@fluidframework/common-utils";
 import { IVectorConsumer } from "@tiny-calc/nano";
 import { Handle, isHandleValid } from "./handletable";
 import { PermutationVector, PermutationSegment } from "./permutationvector";
@@ -21,7 +21,7 @@ export class HandleCache implements IVectorConsumer<Handle> {
     private handles: Handle[] = [];
     private start = 0;
 
-    constructor (public readonly vector: PermutationVector) { }
+    constructor(public readonly vector: PermutationVector) { }
 
     /**
      * Returns the index of the given position in the 'handles' array as a Uint32.
@@ -76,7 +76,8 @@ export class HandleCache implements IVectorConsumer<Handle> {
         for (let pos = start; pos < end; pos++) {
             const { segment, offset } = vector.getContainingSegment(pos);
             const asPerm = segment as PermutationSegment;
-            handles.push(asPerm.start + offset);
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            handles.push(asPerm.start + offset!);
         }
 
         return handles;

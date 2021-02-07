@@ -3,6 +3,7 @@
  * Licensed under the MIT License.
  */
 
+import { assert } from "@fluidframework/common-utils";
 import {
     IFluidObject,
     IFluidHandle,
@@ -35,6 +36,7 @@ export class RemoteFluidObjectHandle implements IFluidHandle {
         public readonly absolutePath: string,
         public readonly routeContext: IFluidHandleContext,
     ) {
+        assert(absolutePath.startsWith("/"), "Handles should always have absolute paths");
     }
 
     /**
@@ -50,7 +52,7 @@ export class RemoteFluidObjectHandle implements IFluidHandle {
                 .then<IFluidObject>((response) =>
                     response.mimeType === "fluid/object"
                         ? response.value as IFluidObject
-                        : Promise.reject("Not found"));
+                        : Promise.reject(new Error(response.value)));
         }
 
         return this.dataStoreP;

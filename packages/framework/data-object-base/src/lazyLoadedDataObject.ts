@@ -63,19 +63,14 @@ export abstract class LazyLoadedDataObject<
             this._handle = new FluidObjectHandle(
                 this,
                 "",
-                this.runtime.IFluidHandleContext);
+                this.runtime.objectsRoutingContext);
         }
 
         return this._handle;
     }
 
-    /**
-     * Absolute URL to the data object within the document
-     */
-    public get url() { return this.runtime.IFluidHandleContext.absolutePath; }
-
     // #endregion IFluidLoadable
 
     public abstract create(props?: any);
-    public abstract async load();
+    public abstract load(): Promise<void>;
 }

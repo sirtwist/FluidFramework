@@ -5,10 +5,7 @@
 
 import { strict as assert } from "assert";
 import { IFluidHandle } from "@fluidframework/core-interfaces";
-import { IContainer, ILoader, IFluidCodeDetails } from "@fluidframework/container-definitions";
 import { IFluidDataStoreRuntime } from "@fluidframework/datastore-definitions";
-import { IUrlResolver } from "@fluidframework/driver-definitions";
-import { LocalResolver } from "@fluidframework/local-driver";
 import { ISharedMap, SharedMap } from "@fluidframework/map";
 import {
     ConsensusRegisterCollection,
@@ -16,65 +13,55 @@ import {
     ReadPolicy,
 } from "@fluidframework/register-collection";
 import { requestFluidObject } from "@fluidframework/runtime-utils";
-import { ILocalDeltaConnectionServer, LocalDeltaConnectionServer } from "@fluidframework/server-local-server";
 import {
-    createAndAttachContainer,
-    createLocalLoader,
     ITestFluidObject,
-    TestFluidObjectFactory,
+    ChannelFactoryRegistry,
 } from "@fluidframework/test-utils";
+import {
+    generateTest,
+    ITestObjectProvider,
+    ITestContainerConfig,
+    DataObjectFactoryType,
+} from "./compatUtils";
 
 interface ISharedObjectConstructor<T> {
     create(runtime: IFluidDataStoreRuntime, id?: string): T;
 }
 
-function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegisterCollection>) {
-    describe(name, () => {
-        const documentId = "consensusRegisterCollectionTest";
-        const documentLoadUrl = `fluid-test://localhost/${documentId}`;
-        const mapId = "mapKey";
-        const codeDetails: IFluidCodeDetails = {
-            package: "consensusRegisterCollectionTestPackage",
-            config: {},
-        };
-        const factory = new TestFluidObjectFactory([
-            [mapId, SharedMap.getFactory()],
-            [undefined, ConsensusRegisterCollection.getFactory()],
-        ]);
+const mapId = "mapKey";
+const registry: ChannelFactoryRegistry = [
+    [mapId, SharedMap.getFactory()],
+    [undefined, ConsensusRegisterCollection.getFactory()],
+];
+const testContainerConfig: ITestContainerConfig = {
+    fluidDataObjectType: DataObjectFactoryType.Test,
+    registry,
+};
 
-        let deltaConnectionServer: ILocalDeltaConnectionServer;
-        let urlResolver: IUrlResolver;
+function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegisterCollection>) {
+    const tests = (argsFactory: () => ITestObjectProvider) => {
+    let args: ITestObjectProvider;
+    beforeEach(()=>{
+        args = argsFactory();
+    });
         let dataStore1: ITestFluidObject;
         let sharedMap1: ISharedMap;
         let sharedMap2: ISharedMap;
         let sharedMap3: ISharedMap;
 
-        async function createContainer(): Promise<IContainer> {
-            const loader: ILoader = createLocalLoader([[codeDetails, factory]], deltaConnectionServer, urlResolver);
-            return createAndAttachContainer(documentId, codeDetails, loader, urlResolver);
-        }
-
-        async function loadContainer(): Promise<IContainer> {
-            const loader: ILoader = createLocalLoader([[codeDetails, factory]], deltaConnectionServer, urlResolver);
-            return loader.resolve({ url: documentLoadUrl });
-        }
-
         beforeEach(async () => {
-            deltaConnectionServer = LocalDeltaConnectionServer.create();
-            urlResolver = new LocalResolver();
-
             // Create a Container for the first client.
-            const container1 = await createContainer();
+            const container1 = await args.makeTestContainer(testContainerConfig);
             dataStore1 = await requestFluidObject<ITestFluidObject>(container1, "default");
             sharedMap1 = await dataStore1.getSharedObject<SharedMap>(mapId);
 
             // Load the Container that was created by the first client.
-            const container2 = await loadContainer();
+            const container2 = await args.loadTestContainer(testContainerConfig);
             const dataStore2 = await requestFluidObject<ITestFluidObject>(container2, "default");
             sharedMap2 = await dataStore2.getSharedObject<SharedMap>(mapId);
 
             // Load the Container that was created by the first client.
-            const container3 = await loadContainer();
+            const container3 = await args.loadTestContainer(testContainerConfig);
             const dataStore3 = await requestFluidObject<ITestFluidObject>(container3, "default");
             sharedMap3 = await dataStore3.getSharedObject<SharedMap>(mapId);
         });
@@ -89,6 +76,8 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
                 sharedMap2.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
                 sharedMap3.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
             ]);
+            assert(collection2Handle);
+            assert(collection3Handle);
             const collection2 = await collection2Handle.get();
             const collection3 = await collection3Handle.get();
 
@@ -112,6 +101,8 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
                 sharedMap2.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
                 sharedMap3.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
             ]);
+            assert(collection2Handle);
+            assert(collection3Handle);
             const collection2 = await collection2Handle.get();
             const collection3 = await collection3Handle.get();
 
@@ -119,7 +110,9 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
             const write2P = collection2.write("key1", "value2");
             const write3P = collection3.write("key1", "value3");
             await Promise.all([write1P, write2P, write3P]);
+            await args.opProcessingController.process();
             const versions = collection1.readVersions("key1");
+            assert(versions);
             assert.strictEqual(versions.length, 3, "Concurrent updates were not preserved");
             assert.strictEqual(versions[0], "value1", "Incorrect update sequence");
             assert.strictEqual(versions[1], "value2", "Incorrect update sequence");
@@ -138,6 +131,8 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
                 sharedMap2.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
                 sharedMap3.wait<IFluidHandle<IConsensusRegisterCollection>>("collection"),
             ]);
+            assert(collection2Handle);
+            assert(collection3Handle);
             const collection2 = await collection2Handle.get();
             const collection3 = await collection3Handle.get();
 
@@ -145,21 +140,30 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
             const write2P = collection2.write("key1", "value2");
             const write3P = collection3.write("key1", "value3");
             await Promise.all([write1P, write2P, write3P]);
+            await args.opProcessingController.process();
+
             const versions = collection1.readVersions("key1");
+            assert(versions);
             assert.strictEqual(versions.length, 3, "Concurrent updates were not preserved");
 
             await collection3.write("key1", "value4");
+            await args.opProcessingController.process();
             const versions2 = collection1.readVersions("key1");
+            assert(versions2);
             assert.strictEqual(versions2.length, 1, "Happened after value did not overwrite");
             assert.strictEqual(versions2[0], "value4", "Happened after value did not overwrite");
 
             await collection2.write("key1", "value5");
+            await args.opProcessingController.process();
             const versions3 = collection1.readVersions("key1");
+            assert(versions3);
             assert.strictEqual(versions3.length, 1, "Happened after value did not overwrite");
             assert.strictEqual(versions3[0], "value5", "Happened after value did not overwrite");
 
             await collection1.write("key1", "value6");
+            await args.opProcessingController.process();
             const versions4 = collection1.readVersions("key1");
+            assert(versions4);
             assert.strictEqual(versions4.length, 1, "Happened after value did not overwrite");
             assert.strictEqual(versions4[0], "value6", "Happened after value did not overwrite");
 
@@ -167,7 +171,9 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
             const write8P = collection2.write("key1", "value8");
             const write9P = collection3.write("key1", "value9");
             await Promise.all([write7P, write8P, write9P]);
+            await args.opProcessingController.process();
             const versions5 = collection3.readVersions("key1");
+            assert(versions5);
             assert.strictEqual(versions5.length, 3, "Concurrent happened after updates should overwrite and preserve");
             assert.strictEqual(versions5[0], "value7", "Incorrect update sequence");
             assert.strictEqual(versions5[1], "value8", "Incorrect update sequence");
@@ -175,6 +181,7 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
 
             await collection2.write("key1", "value10");
             const versions6 = collection2.readVersions("key1");
+            assert(versions6);
             assert.strictEqual(versions6.length, 1, "Happened after value did not overwrite");
             assert.strictEqual(versions6[0], "value10", "Happened after value did not overwrite");
         });
@@ -190,6 +197,7 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
             // Pull the collection off of the 2nd container
             const collection2Handle =
                 await sharedMap2.wait<IFluidHandle<IConsensusRegisterCollection>>("collection");
+            assert(collection2Handle);
             const collection2 = await collection2Handle.get();
 
             // acquire one handle in each container
@@ -201,10 +209,10 @@ function generate(name: string, ctor: ISharedObjectConstructor<IConsensusRegiste
             assert.equal(sharedMap1Prime.get("test"), "sampleValue");
             assert.equal(sharedMap2Prime.get("test"), "sampleValue");
         });
+    };
 
-        afterEach(async () => {
-            await deltaConnectionServer.webSocketServer.close();
-        });
+    describe(name, () => {
+        generateTest(tests);
     });
 }
 

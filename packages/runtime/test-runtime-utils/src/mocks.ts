@@ -3,8 +3,12 @@
  * Licensed under the MIT License.
  */
 
-import { strict as assert } from "assert";
 import { EventEmitter } from "events";
+import {
+    assert,
+    fromUtf8ToBase64,
+    stringToBuffer,
+} from "@fluidframework/common-utils";
 import { ITelemetryLogger } from "@fluidframework/common-definitions";
 import {
     IFluidHandle,
@@ -14,26 +18,21 @@ import {
 } from "@fluidframework/core-interfaces";
 import {
     IAudience,
-    IGenericBlob,
     ContainerWarning,
     ILoader,
     AttachState,
+    ILoaderOptions,
 } from "@fluidframework/container-definitions";
-import {
-    Deferred,
-    fromUtf8ToBase64,
-} from "@fluidframework/common-utils";
+
 import { DebugLogger } from "@fluidframework/telemetry-utils";
 import {
-    IBlob,
     ICommittedProposal,
     IQuorum,
     ISequencedClient,
     ISequencedDocumentMessage,
-    ITree,
+    ISummaryTree,
     ITreeEntry,
     MessageType,
-    TreeEntry,
     SummaryType,
 } from "@fluidframework/protocol-definitions";
 import {
@@ -45,7 +44,11 @@ import {
     IChannelServices,
 } from "@fluidframework/datastore-definitions";
 import { FluidSerializer, getNormalizedObjectStoragePathParts, mergeStats } from "@fluidframework/runtime-utils";
-import { IFluidDataStoreChannel, ISummaryTreeWithStats } from "@fluidframework/runtime-definitions";
+import {
+    IChannelSummarizeResult,
+    IFluidDataStoreChannel,
+    IGarbageCollectionData,
+} from "@fluidframework/runtime-definitions";
 import { v4 as uuid } from "uuid";
 import { MockDeltaManager } from "./mockDeltas";
 
@@ -251,7 +254,7 @@ export class MockQuorum implements IQuorum, EventEmitter {
 
     async propose(key: string, value: any) {
         if (this.map.has(key)) {
-            assert.fail(`${key} exists`);
+            throw new Error(`${key} exists`);
         }
         this.map.set(key, value);
         this.eventEmitter.emit("approveProposal", 0, key, value);
@@ -263,6 +266,7 @@ export class MockQuorum implements IQuorum, EventEmitter {
     }
 
     get(key: string) {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
         return this.map.get(key);
     }
 
@@ -339,9 +343,11 @@ export class MockQuorum implements IQuorum, EventEmitter {
     getMaxListeners(): number {
         throw new Error("Method not implemented.");
     }
+    // eslint-disable-next-line @typescript-eslint/ban-types
     listeners(event: string | symbol): Function[] {
         throw new Error("Method not implemented.");
     }
+    // eslint-disable-next-line @typescript-eslint/ban-types
     rawListeners(event: string | symbol): Function[] {
         throw new Error("Method not implemented.");
     }
@@ -362,23 +368,25 @@ export class MockQuorum implements IQuorum, EventEmitter {
 export class MockFluidDataStoreRuntime extends EventEmitter
     implements IFluidDataStoreRuntime, IFluidDataStoreChannel, IFluidHandleContext {
     public get IFluidHandleContext(): IFluidHandleContext { return this; }
+    public get rootRoutingContext(): IFluidHandleContext { return this; }
+    public get channelsRoutingContext(): IFluidHandleContext { return this; }
+    public get objectsRoutingContext(): IFluidHandleContext { return this; }
+
     public get IFluidRouter() { return this; }
 
-    public readonly IFluidSerializer = new FluidSerializer();
+    public readonly IFluidSerializer = new FluidSerializer(this.IFluidHandleContext);
 
     public readonly documentId: string;
     public readonly id: string = uuid();
     public readonly existing: boolean;
-    public options: any = {};
+    public options: ILoaderOptions = {};
     public clientId: string | undefined = uuid();
-    public readonly parentBranch: string;
     public readonly path = "";
     public readonly connected = true;
     public readonly leader: boolean;
     public deltaManager = new MockDeltaManager();
     public readonly loader: ILoader;
     public readonly logger: ITelemetryLogger = DebugLogger.create("fluid:MockFluidDataStoreRuntime");
-    private readonly activeDeferred = new Deferred<void>();
     public readonly quorum = new MockQuorum();
 
     public get absolutePath() {
@@ -401,10 +409,6 @@ export class MockFluidDataStoreRuntime extends EventEmitter
 
     public dispose(): void {
         this._disposed = true;
-    }
-
-    public get active(): Promise<void> {
-        return this.activeDeferred.promise;
     }
 
     public async getChannel(id: string): Promise<IChannel> {
@@ -446,10 +450,6 @@ export class MockFluidDataStoreRuntime extends EventEmitter
         return null;
     }
 
-    public async snapshot(message: string): Promise<void> {
-        return null;
-    }
-
     public save(message: string) {
         return;
     }
@@ -458,15 +458,11 @@ export class MockFluidDataStoreRuntime extends EventEmitter
         return null;
     }
 
-    public async uploadBlob(file: IGenericBlob): Promise<IGenericBlob> {
+    public async uploadBlob(blob: ArrayBufferLike): Promise<IFluidHandle<ArrayBufferLike>> {
         return null;
     }
 
-    public async getBlob(blobId: string): Promise<IGenericBlob> {
-        return null;
-    }
-
-    public async getBlobMetadata(): Promise<IGenericBlob[]> {
+    public async getBlob(blobId: string): Promise<any> {
         return null;
     }
 
@@ -502,11 +498,7 @@ export class MockFluidDataStoreRuntime extends EventEmitter
         return null;
     }
 
-    public async snapshotInternal(): Promise<ITreeEntry[]> {
-        return [];
-    }
-
-    public async summarize(fullTree?: boolean): Promise<ISummaryTreeWithStats> {
+    public async summarize(fullTree?: boolean, trackState?: boolean): Promise<IChannelSummarizeResult> {
         const stats = mergeStats();
         stats.treeNodeCount++;
         return {
@@ -515,11 +507,37 @@ export class MockFluidDataStoreRuntime extends EventEmitter
                 tree: {},
             },
             stats,
+            gcData: {
+                gcNodes: {},
+            },
         };
     }
 
+    public async getGCData(): Promise<IGarbageCollectionData> {
+        return {
+            gcNodes: {},
+        };
+    }
+
+    public updateUsedRoutes(usedRoutes: string[]) {}
+
     public getAttachSnapshot(): ITreeEntry[] {
         return [];
+    }
+
+    public getAttachSummary(): IChannelSummarizeResult {
+        const stats = mergeStats();
+        stats.treeNodeCount++;
+        return {
+            summary: {
+                type: SummaryType.Tree,
+                tree: {},
+            },
+            stats,
+            gcData: {
+                gcNodes: {},
+            },
+        };
     }
 
     public setAttachState(attachState: AttachState.Attaching | AttachState.Attached): void {
@@ -571,6 +589,10 @@ export class MockObjectStorageService implements IChannelStorageService {
         return fromUtf8ToBase64(content);
     }
 
+    public async readBlob(path: string): Promise<ArrayBufferLike> {
+        return stringToBuffer(this.contents[path], "utf8");
+    }
+
     public async contains(path: string): Promise<boolean> {
         return this.contents[path] !== undefined;
     }
@@ -587,11 +609,11 @@ export class MockObjectStorageService implements IChannelStorageService {
  * Mock implementation of IChannelServices
  */
 export class MockSharedObjectServices implements IChannelServices {
-    public static createFromTree(tree: ITree) {
+    public static createFromSummary(summaryTree: ISummaryTree) {
         const contents: { [key: string]: string } = {};
-        for (const entry of tree.entries) {
-            assert(entry.type === TreeEntry.Blob);
-            contents[entry.path] = (entry.value as IBlob).contents;
+        for (const [key, value] of Object.entries(summaryTree.tree)) {
+            assert(value.type === SummaryType.Blob);
+            contents[key] = value.content as string;
         }
         return new MockSharedObjectServices(contents);
     }

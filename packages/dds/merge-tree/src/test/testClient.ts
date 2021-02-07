@@ -20,6 +20,7 @@ import { IJSONSegment, IMarkerDef, IMergeTreeOp, MergeTreeDeltaType, ReferenceTy
 import { PropertySet } from "../properties";
 import { SnapshotLegacy } from "../snapshotlegacy";
 import { MergeTreeTextHelper, TextSegment } from "../textSegment";
+import { TestSerializer } from "./testSerializer";
 import { nodeOrdinalsHaveIntegrity } from "./testUtils";
 
 export function specToSegment(spec: IJSONSegment): ISegment {
@@ -41,6 +42,7 @@ mt.seedWithArray([0xDEADBEEF, 0xFEEDBED]);
 
 export class TestClient extends Client {
     public static searchChunkSize = 256;
+    public static readonly serializer = new TestSerializer();
 
     /**
      * Used for in-memory testing.  This will queue a reference string for each client message.
@@ -50,7 +52,8 @@ export class TestClient extends Client {
     public static async createFromClientSnapshot(client1: TestClient, newLongClientId: string): Promise<TestClient> {
         const snapshot = new SnapshotLegacy(client1.mergeTree, DebugLogger.create("fluid:snapshot"));
         snapshot.extractSync();
-        const snapshotTree = snapshot.emit([]);
+        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+        const snapshotTree = snapshot.emit([], TestClient.serializer, undefined!);
         return TestClient.createFromSnapshot(snapshotTree, newLongClientId, client1.specToSegment);
     }
 
@@ -67,7 +70,8 @@ export class TestClient extends Client {
                 logger: client2.logger,
                 clientId: newLongClientId,
             } as IFluidDataStoreRuntime,
-            services);
+            services,
+            TestClient.serializer);
         await catchupOpsP;
         return client2;
     }

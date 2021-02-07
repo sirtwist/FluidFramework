@@ -4,18 +4,19 @@
  */
 
 import * as cell from "@fluidframework/cell";
-import { FluidDataStoreRuntime } from "@fluidframework/datastore";
+import { mixinRequestHandler, FluidDataStoreRuntime } from "@fluidframework/datastore";
 import {
     ICodeLoader,
     IContainerContext,
-    IFluidCodeDetails,
     IRuntime,
     IRuntimeFactory,
     IFluidModule,
 } from "@fluidframework/container-definitions";
+import { IFluidCodeDetails, IRequest } from "@fluidframework/core-interfaces";
 import { ContainerRuntime, IContainerRuntimeOptions } from "@fluidframework/container-runtime";
 import * as ink from "@fluidframework/ink";
 import * as map from "@fluidframework/map";
+import { SharedMatrix } from "@fluidframework/matrix";
 import { ConsensusQueue } from "@fluidframework/ordered-collection";
 import {
     IFluidDataStoreContext,
@@ -24,7 +25,7 @@ import {
 } from "@fluidframework/runtime-definitions";
 import * as sequence from "@fluidframework/sequence";
 import {
-    deprecated_innerRequestHandler,
+    innerRequestHandler,
     buildRuntimeRequestHandler,
 } from "@fluidframework/request-handler";
 import { defaultRouteRequestHandler } from "@fluidframework/aqueduct";
@@ -39,7 +40,10 @@ export class Chaincode implements IFluidDataStoreFactory {
 
     public get IFluidDataStoreFactory() { return this; }
 
-    public constructor(private readonly closeFn: () => void) { }
+    public constructor(
+        private readonly closeFn: () => void,
+        private readonly dataStoreFactory: typeof FluidDataStoreRuntime = FluidDataStoreRuntime)
+    { }
 
     public async instantiateDataStore(context: IFluidDataStoreContext) {
         // Create channel factories
@@ -53,6 +57,7 @@ export class Chaincode implements IFluidDataStoreFactory {
         const sparseMatrixFactory = sequence.SparseMatrix.getFactory();
         const directoryFactory = map.SharedDirectory.getFactory();
         const sharedIntervalFactory = sequence.SharedIntervalCollection.getFactory();
+        const sharedMatrixFactory = SharedMatrix.getFactory();
 
         // Register channel factories
         const modules = new Map<string, any>();
@@ -66,8 +71,24 @@ export class Chaincode implements IFluidDataStoreFactory {
         modules.set(sparseMatrixFactory.type, sparseMatrixFactory);
         modules.set(directoryFactory.type, directoryFactory);
         modules.set(sharedIntervalFactory.type, sharedIntervalFactory);
+        modules.set(sharedMatrixFactory.type, sharedMatrixFactory);
 
-        const runtime = FluidDataStoreRuntime.load(context, modules);
+        const runtimeClass = mixinRequestHandler(
+            async (request: IRequest) => {
+                const document = await routerP;
+                if (request.url === "" || request.url === "/") {
+                    return {
+                        mimeType: "fluid/object",
+                        status: 200,
+                        value: document,
+                    };
+                } else {
+                    return { status: 404, mimeType: "text/plain", value: `${request.url} not found` };
+                }
+            },
+            this.dataStoreFactory);
+
+        const runtime = new runtimeClass(context, modules);
 
         // Initialize core data structures
         let root: map.ISharedMap;
@@ -84,17 +105,8 @@ export class Chaincode implements IFluidDataStoreFactory {
             root = await runtime.getChannel(rootMapId) as map.ISharedMap;
             return new Document(runtime, context, root, this.closeFn);
         };
-        const documentP = createDocument();
 
-        // And then return it from requests
-        runtime.registerRequestHandler(async (request) => {
-            const document = await documentP;
-            return {
-                mimeType: "fluid/object",
-                status: 200,
-                value: document,
-            };
-        });
+        const routerP = createDocument();
 
         return runtime;
     }
@@ -119,7 +131,7 @@ export class ChaincodeFactory implements IRuntimeFactory {
             ],
             buildRuntimeRequestHandler(
                 defaultRouteRequestHandler(rootStoreId),
-                deprecated_innerRequestHandler,
+                innerRequestHandler,
             ),
             this.runtimeOptions);
 

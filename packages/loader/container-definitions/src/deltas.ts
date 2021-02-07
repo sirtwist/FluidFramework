@@ -6,12 +6,11 @@
 import { IDisposable, IEventProvider, IEvent, IErrorEvent } from "@fluidframework/common-definitions";
 import {
     ConnectionMode,
+    IClientConfiguration,
     IClientDetails,
-    IContentMessage,
     IDocumentMessage,
     IProcessMessageResult,
     ISequencedDocumentMessage,
-    IServiceConfiguration,
     ISignalClient,
     ISignalMessage,
     ITokenClaims,
@@ -26,14 +25,10 @@ export interface IConnectionDetails {
     claims: ITokenClaims;
     existing: boolean;
     mode: ConnectionMode;
-    parentBranch: string | null;
     version: string;
     initialClients: ISignalClient[];
-    initialMessages: ISequencedDocumentMessage[];
-    initialContents: IContentMessage[];
-    initialSignals: ISignalMessage[];
     maxMessageSize: number;
-    serviceConfiguration: IServiceConfiguration;
+    serviceConfiguration: IClientConfiguration;
     /**
      * Last known sequence number to ordering service at the time of connection
      * It may lap actual last sequence number (quite a bit, if container  is very active).
@@ -95,7 +90,8 @@ export interface IDeltaManagerEvents extends IEvent {
     (event: "prepareSend", listener: (messageBuffer: any[]) => void);
     (event: "submitOp", listener: (message: IDocumentMessage) => void);
     (event: "beforeOpProcessing", listener: (message: ISequencedDocumentMessage) => void);
-    (event: "allSentOpsAckd" | "caughtUp", listener: () => void);
+    (event: "op", listener: (message: ISequencedDocumentMessage, processingTime: number) => void);
+    (event: "allSentOpsAckd", listener: () => void);
     (event: "pong" | "processTime", listener: (latency: number) => void);
     (event: "connect", listener: (details: IConnectionDetails, opsBehind?: number) => void);
     (event: "disconnect", listener: (reason: string) => void);
@@ -127,6 +123,12 @@ export interface IDeltaManager<T, U> extends IEventProvider<IDeltaManagerEvents>
     /** The initial sequence number set when attaching the op handler */
     readonly initialSequenceNumber: number;
 
+    /**
+     * Tells if  current connection has checkpoint information.
+     * I.e. we know how far behind the client was at the time of establishing connection
+     */
+    readonly hasCheckpointSequenceNumber: boolean;
+
     /** Details of client */
     readonly clientDetails: IClientDetails;
 
@@ -137,7 +139,7 @@ export interface IDeltaManager<T, U> extends IEventProvider<IDeltaManagerEvents>
     readonly maxMessageSize: number;
 
     /** Service configuration provided by the service. */
-    readonly serviceConfiguration: IServiceConfiguration | undefined;
+    readonly serviceConfiguration: IClientConfiguration | undefined;
 
     /** Flag to indicate whether the client can write or not. */
     readonly active: boolean;
@@ -163,7 +165,7 @@ export interface IDeltaManager<T, U> extends IEventProvider<IDeltaManagerEvents>
     submitSignal(content: any): void;
 }
 
-/** Events emmitted by a Delta Queue */
+/** Events emitted by a Delta Queue */
 export interface IDeltaQueueEvents<T> extends IErrorEvent {
     (event: "push" | "op", listener: (task: T) => void);
     (event: "idle", listener: () => void);
@@ -208,15 +210,4 @@ export interface IDeltaQueue<T> extends IEventProvider<IDeltaQueueEvents<T>>, ID
      * Returns all the items in the queue as an array. Does not remove them from the queue.
      */
     toArray(): T[];
-
-    /**
-     * System level pause
-     * @returns A promise which resolves when processing has been paused.
-     */
-    systemPause(): Promise<void>;
-
-    /**
-     * System level resume
-     */
-    systemResume(): void;
 }

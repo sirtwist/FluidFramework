@@ -19,6 +19,7 @@ export class LastEditedTrackerDataObject extends DataObject
         LastEditedTrackerDataObject,
         [SharedSummaryBlock.getFactory()],
         {},
+        undefined,
     );
 
     public static getFactory() {
@@ -45,7 +46,8 @@ export class LastEditedTrackerDataObject extends DataObject
 
     protected async hasInitialized() { // hasInitialized
         const sharedSummaryBlock =
-            await this.root.get<IFluidHandle<SharedSummaryBlock>>(this.sharedSummaryBlockId).get();
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            await this.root.get<IFluidHandle<SharedSummaryBlock>>(this.sharedSummaryBlockId)!.get();
         this._lastEditedTracker = new LastEditedTracker(sharedSummaryBlock);
     }
 }

@@ -4,6 +4,7 @@
  */
 
 import { EventEmitter } from "events";
+import { defaultFluidObjectRequestHandler } from "@fluidframework/aqueduct";
 import {
     IFluidLoadable,
     IFluidRouter,
@@ -11,7 +12,7 @@ import {
     IResponse,
     IFluidHandle,
 } from "@fluidframework/core-interfaces";
-import { FluidObjectHandle, FluidDataStoreRuntime } from "@fluidframework/datastore";
+import { FluidObjectHandle, mixinRequestHandler } from "@fluidframework/datastore";
 import { ISharedMap, SharedMap } from "@fluidframework/map";
 import {
     IMergeTreeInsertMsg,
@@ -113,7 +114,6 @@ export class ProseMirror extends EventEmitter
     public get IFluidHTMLView() { return this; }
     public get IRichTextEditor() { return this.collabManager; }
 
-    public url: string;
     public text: SharedString;
     private root: ISharedMap;
     private collabManager: FluidCollabManager;
@@ -126,16 +126,11 @@ export class ProseMirror extends EventEmitter
     ) {
         super();
 
-        this.url = context.id;
-        this.innerHandle = new FluidObjectHandle(this, this.url, runtime.IFluidHandleContext);
+        this.innerHandle = new FluidObjectHandle(this, "", runtime.objectsRoutingContext);
     }
 
     public async request(request: IRequest): Promise<IResponse> {
-        return {
-            mimeType: "fluid/object",
-            status: 200,
-            value: this,
-        };
+        return defaultFluidObjectRequestHandler(this, request);
     }
 
     private async initialize() {
@@ -157,7 +152,7 @@ export class ProseMirror extends EventEmitter
         this.collabManager = new FluidCollabManager(this.text, this.runtime.loader);
 
         // Access for debugging
-        // eslint-disable-next-line dot-notation
+        // eslint-disable-next-line @typescript-eslint/dot-notation
         window["easyComponent"] = this;
     }
 
@@ -183,16 +178,14 @@ class ProseMirrorFactory implements IFluidDataStoreFactory {
         dataTypes.set(mapFactory.type, mapFactory);
         dataTypes.set(sequenceFactory.type, sequenceFactory);
 
-        const runtime = FluidDataStoreRuntime.load(
-            context,
-            dataTypes,
-        );
+        const runtimeClass = mixinRequestHandler(
+            async (request: IRequest) => {
+                const router = await routerP;
+                return router.request(request);
+            });
 
-        const proseMirrorP = ProseMirror.load(runtime, context);
-        runtime.registerRequestHandler(async (request: IRequest) => {
-            const proseMirror = await proseMirrorP;
-            return proseMirror.request(request);
-        });
+        const runtime = new runtimeClass(context, dataTypes);
+        const routerP = ProseMirror.load(runtime, context);
 
         return runtime;
     }

@@ -7,24 +7,37 @@ import { IEventProvider, IErrorEvent, ITelemetryBaseLogger } from "@fluidframewo
 import {
     ConnectionMode,
     IClient,
-    IContentMessage,
+    IClientConfiguration,
     ICreateBlobResponse,
     IDocumentMessage,
     IErrorTrackingService,
     INack,
     ISequencedDocumentMessage,
-    IServiceConfiguration,
     ISignalClient,
     ISignalMessage,
     ISnapshotTree,
     ISummaryHandle,
     ISummaryTree,
     ITokenClaims,
-    ITokenProvider,
     ITree,
     IVersion,
 } from "@fluidframework/protocol-definitions";
 import { IResolvedUrl } from "./urlResolver";
+
+export interface IDeltasFetchResult {
+    /**
+     * Sequential set of messages starting from 'from' sequence number.
+     * May be partial result, i.e. not fulfill original request in full.
+     */
+    messages: ISequencedDocumentMessage[];
+
+    /**
+     * If true, storage only partially fulfilled request, but has more ops
+     * If false, the request was fulfilled. If less ops were returned then
+     * requested, then storage does not have more ops in this range.
+     */
+    partialResult: boolean;
+}
 
 /**
  * Interface to provide access to stored deltas for a shared object
@@ -36,9 +49,8 @@ export interface IDeltaStorageService {
     get(
         tenantId: string,
         id: string,
-        tokenProvider: ITokenProvider,
-        from?: number,
-        to?: number): Promise<ISequencedDocumentMessage[]>;
+        from: number,
+        to: number): Promise<IDeltasFetchResult>;
 }
 
 /**
@@ -48,7 +60,7 @@ export interface IDocumentDeltaStorageService {
     /**
      * Retrieves all the delta operations within the exclusive sequence number range
      */
-    get(from?: number, to?: number): Promise<ISequencedDocumentMessage[]>;
+    get(from: number, to: number): Promise<IDeltasFetchResult>;
 }
 
 /**
@@ -68,7 +80,7 @@ export interface IDocumentStorageService {
     getVersions(versionId: string | null, count: number): Promise<IVersion[]>;
 
     /**
-     * Reads the object with the given ID
+     * Reads the object with the given ID, returns content in base64
      */
     read(id: string): Promise<string>;
 
@@ -80,12 +92,9 @@ export interface IDocumentStorageService {
     /**
      * Creates a blob out of the given buffer
      */
-    createBlob(file: Uint8Array): Promise<ICreateBlobResponse>;
+    createBlob(file: ArrayBufferLike): Promise<ICreateBlobResponse>;
 
-    /**
-     * Fetch blob Data url
-     */
-    getRawUrl(blobId: string): string;
+    readBlob(id: string): Promise<ArrayBufferLike>;
 
     /**
      * Uploads a summary tree to storage using the given context for reference of previous summary handle.
@@ -106,9 +115,9 @@ export interface IDocumentDeltaConnectionEvents extends IErrorEvent {
     (event: "nack", listener: (documentId: string, message: INack[]) => void);
     (event: "disconnect", listener: (reason: any) => void);
     (event: "op", listener: (documentId: string, messages: ISequencedDocumentMessage[]) => void);
-    (event: "op-content", listener: (message: IContentMessage) => void);
     (event: "signal", listener: (message: ISignalMessage) => void);
     (event: "pong", listener: (latency: number) => void);
+    (event: "error", listener: (error: any) => void);
 }
 
 export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaConnectionEvents> {
@@ -133,11 +142,6 @@ export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaC
     existing: boolean;
 
     /**
-     * The parent branch for the document
-     */
-    parentBranch: string | null;
-
-    /**
      * Maximum size of a message that can be sent to the server. Messages larger than this size must be chunked.
      */
     maxMessageSize: number;
@@ -153,11 +157,6 @@ export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaC
     initialMessages: ISequencedDocumentMessage[];
 
     /**
-     * Messages sent during the connection
-     */
-    initialContents: IContentMessage[];
-
-    /**
      * Signals sent during the connection
      */
     initialSignals: ISignalMessage[];
@@ -170,7 +169,7 @@ export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaC
     /**
      * Configuration details provided by the service
      */
-    serviceConfiguration: IServiceConfiguration;
+    serviceConfiguration: IClientConfiguration;
 
     /**
      * Last known sequence number to ordering service at the time of connection
@@ -187,12 +186,6 @@ export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaC
     submit(messages: IDocumentMessage[]): void;
 
     /**
-     * Async version of the regular submit function.
-     */
-    // TODO why the need for two of these?
-    submitAsync(message: IDocumentMessage[]): Promise<void>;
-
-    /**
      * Submit a new signal to the server
      */
     submitSignal(message: any): void;
@@ -200,30 +193,33 @@ export interface IDocumentDeltaConnection extends IEventProvider<IDocumentDeltaC
     /**
      * Disconnects the given delta connection
      */
-    disconnect();
+    close(): void;
+}
+
+export enum LoaderCachingPolicy {
+    /**
+     * The loader should not implement any prefetching or caching policy.
+     */
+    NoCaching,
 
     /**
-     * Emits an event from this document delta connection
-     * @param event - The event to emit
-     * @param args - The arguments for the event
+     * The loader should implement prefetching policy, i.e. it should prefetch resources from the latest snapshot.
      */
-    emit(event: string, ...args: any[]): boolean;
+    Prefetch,
+}
 
-    /**
-     * Gets the listeners for an event
-     * @param event - The name of the event
-     */
-    listeners(event: string): Function[];
-
-    /**
-     * Removes all listeners from all events
-     */
-    removeAllListeners(): void;
+export interface IDocumentServicePolicies {
+    readonly caching?: LoaderCachingPolicy;
 }
 
 export interface IDocumentService {
 
     resolvedUrl: IResolvedUrl;
+
+    /**
+     * Policies implemented/instructed by driver.
+     */
+    policies?: IDocumentServicePolicies;
 
     /**
      * Access to storage associated with the document...
@@ -239,11 +235,6 @@ export interface IDocumentService {
      * Subscribes to the document delta stream
      */
     connectToDeltaStream(client: IClient): Promise<IDocumentDeltaConnection>;
-
-    /**
-     * Creates a branch of the document with the given ID. Returns the new ID.
-     */
-    branch(): Promise<string>;
 
     /**
      * Returns the error tracking service

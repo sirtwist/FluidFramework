@@ -29,10 +29,13 @@ async function start() {
     // Get the Default Object from the Container
     const defaultObject = await getDefaultObjectFromContainer<LikesAndComments>(container);
 
-    defaultObject.render(document.getElementById("content"));
+    const contentDiv = document.getElementById("content");
+    if (contentDiv !== null) {
+        defaultObject.render(contentDiv);
+    }
 
     // Setting "fluidStarted" is just for our test automation
-    // eslint-disable-next-line dot-notation
+    // eslint-disable-next-line @typescript-eslint/dot-notation
     window["fluidStarted"] = true;
 }
 

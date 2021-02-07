@@ -1,5 +1,177 @@
-# Breaking changes
+## 0.34 Breaking changes
+- [Aqueduct writeBlob() and BlobHandle implementation removed](#Aqueduct-writeBlob-and-BlobHandle-implementation-removed)
+- [Connected events raised on registration](#Connected-events-raised-on-registration)
 
+### Aqueduct writeBlob() and BlobHandle implementation removed
+`writeBlob()` and `BlobHandle` have been removed from aqueduct. Please use `FluidDataStoreRuntime.uploadBlob()` or `ContainerRuntime.uploadBlob()` instead.
+
+### Connected events raised on registration
+Connected / disconnected listeners are called on registration.
+Pleas see [Connectivity events](packages/loader/container-loader/README.md#Connectivity-events) section of Loader readme.md for more details
+
+## 0.33 Breaking changes
+- [Normalizing enum ContainerErrorType](#normalizing-enum-containererrortype)
+- [Map and Directory typing changes from enabling strictNullCheck](#map-and-directory-typing-changes-from-enabling-strictNullCheck)
+- [MergeTree's ReferencePosition.getTileLabels and ReferencePosition.getRangeLabels() return undefined if it doesn't exist](#mergetree-referenceposition-gettilelabels-getrangelabels-changes)
+- [Containers from Loader.request() are now cached by default](#Containers-from-Loader.request()-are-now-cached-by-default)
+
+### Normalizing enum ContainerErrorType
+In an effort to clarify error categorization, a name and value in this enumeration were changed.
+
+### Map and Directory typing changes from enabling strictNullCheck
+Typescript compile options `strictNullCheck` is enabled for the `@fluidframework/map` package. Some of the API signature is updated to include possibility of `undefined` and `null`, which can cause new typescript compile error when upgrading.  Existing code may need to update to handle the possiblity of `undefined` or `null.
+
+### MergeTree ReferencePosition getTileLabels getRangeLabels changes
+This includes LocalReference and Marker.  getTileLabels and getRangeLabels methods will return undefined instead of creating an empty if the properties for tile labels and range labels is not set.
+
+### Containers from Loader.request() are now cached by default
+Some loader request header options that previously prevented caching (`pause: true` and `reconnect: false`) no longer do.  Callers must now explicitly spcify `cache: false` in the request header to prevent caching of the returned container.  Containers are evicted from the cache in their `closed` event, and closed containers that are requested are not cached.
+
+## 0.32 Breaking changes
+- [Node version 12.17 required](#Node-version-update)
+- [getAttachSnapshot removed IFluidDataStoreChannel](#getAttachSnapshot-removed-from-IFluidDataStoreChannel)
+- [resolveDataStore replaced](#resolveDataStore-replaced)
+
+### Node version updated to 12.17
+Due to changes in server packages and introduction of AsyncLocalStorage module which requires Node version 12.17 or above, you will need to update Node version to 12.17 or above.
+
+### getAttachSnapshot removed from IFluidDataStoreChannel
+`getAttachSnapshot()` has been removed from `IFluidDataStoreChannel`. It is replaced by `getAttachSummary()`.
+
+### resolveDataStore replaced
+The resolveDataStore method manually exported by the ODSP resolver has been replaced with checkUrl() from the same package.
+
+## 0.30 Breaking Changes
+
+- [Branching removed](#Branching-removed)
+- [removeAllEntriesForDocId api name and signature change](#removeAllEntriesForDocId-api-name-and-signature-change)
+- [snapshot removed from IChannel and ISharedObject](#snapshot-removed-from-IChannel-and-ISharedObject)
+
+### Branching removed
+The branching feature has been removed. This includes all related members, methods, etc. such as `parentBranch`, `branchId`, `branch()`, etc.
+
+### removeAllEntriesForDocId api name and signature change
+`removeAllEntriesForDocId` api renamed to `removeEntries`. Now it takes `IFileEntry` as argument instead of just docId.
+
+### snapshot removed from IChannel and ISharedObject
+`snapshot` has been removed from `IChannel` and `ISharedObject`. It is replaced by `summarize` which should be used to get a summary of the channel / shared object.
+
+## 0.29 Breaking Changes
+
+- [OdspDriverUrlResolver2 renamed to OdspDriverUrlResolverForShareLink](#OdspDriverUrlResolver2-renamed-to-OdspDriverUrlResolverForShareLink)
+- [removeAllEntriesForDocId api in host storage changed](#removeAllEntriesForDocId-api-in-host-storage-changed)
+- [IContainerRuntimeBase.IProvideFluidDataStoreRegistry](#IContainerRuntimeBase.IProvideFluidDataStoreRegistry)
+- [_createDataStoreWithProps returns IFluidRouter](#_createDataStoreWithProps-returns-IFluidRouter)
+- [FluidDataStoreRuntime.registerRequestHandler deprecated](#FluidDataStoreRuntime.registerRequestHandler-deprecated)
+- [snapshot removed from IFluidDataStoreRuntime](#snapshot-removed-from-IFluidDataStoreRuntime)
+- [getAttachSnapshot deprecated in IFluidDataStoreChannel](#getAttachSnapshot-deprecated-in-IFluidDataStoreChannel)
+
+### OdspDriverUrlResolver2 renamed to OdspDriverUrlResolverForShareLink
+`OdspDriverUrlResolver2` renamed to `OdspDriverUrlResolverForShareLink`
+
+### removeAllEntriesForDocId api in host storage changed
+`removeAllEntriesForDocId` api in host storage is now an async api.
+
+### IContainerRuntimeBase.IProvideFluidDataStoreRegistry
+`IProvideFluidDataStoreRegistry` implementation moved from IContainerRuntimeBase to IContainerRuntime. Data stores and objects should not have access to global state in container.
+`IProvideFluidDataStoreRegistry` is removed from IFluidDataStoreChannel - it has not been implemented there for a while (it moved to context).
+
+### _createDataStoreWithProps returns IFluidRouter
+`IContainerRuntimeBase._createDataStoreWithProps` returns IFluidRouter instead of IFluidDataStoreChannel. This is done to be consistent with other APIs create data stores, and ensure we do not return internal interfaces. This likely to expose areas where IFluidDataStoreChannel.bindToContext() was called manually on data store. Such usage should be re-evaluate - lifetime management should be left up to runtime, storage of any handle form data store in attached DDS will result in automatic attachment of data store (and all of its objects) to container. If absolutely needed, and only for staging, casting can be done to implement old behavior.
+
+### FluidDataStoreRuntime.registerRequestHandler deprecated
+Please use mixinRequestHandler() as a way to create custom data store runtime  factory/object and append request handling to existing implementation.
+
+### snapshot removed from IFluidDataStoreRuntime
+`snapshot` has been removed from `IFluidDataStoreRuntime`.
+
+### getAttachSnapshot deprecated in IFluidDataStoreChannel
+`getAttachSnapshot()` has been deprecated in `IFluidDataStoreChannel`. It is replaced by `getAttachSummary()`.
+
+## 0.28 Breaking Changes
+
+- [FileName should contain extension for ODSP driver create new path](#FileName-should-contain-extension-for-ODSP-driver-create-new-path)
+- [ODSP Driver IPersistedCache changes](#ODSP-Driver-IPersistedCache-Changes)
+- [IFluidPackage Changes](#IFluidPackage-Changes)
+- [DataObject changes](#DataObject-changes)
+- [RequestParser](#RequestParser)
+- [IFluidLodable.url is removed](#IFluidLodable.url-is-removed)
+- [Loader Constructor Changes](#Loader-Constructor-Changes)
+- [Moving DriverHeader and merge with CreateNewHeader](#moving-driverheader-and-merge-with-createnewheader)
+- [ODSP status codes moved from odsp-driver to odsp-doclib-utils](#ODSP-status-codes-moved-modules-from-odsp-driver-to-odsp-doclib-utils)
+
+### FileName should contain extension for ODSP driver create new path
+Now the ODSP driver expects file extension in the file name while creating a new detached container.
+
+### ODSP Driver IPersistedCache-Changes
+Added api `removeAllEntriesForDocId` which allows removal of all entries for a given document id. Also the schema for entries stored inside odsp `IPersistedCache` has changed.
+It now stores/expect values as `IPersistedCacheValueWithEpoch`. So host needs to clear its cached entries in this version.
+
+### IFluidPackage Changes
+- Moving IFluidPackage and IFluidCodeDetails from "@fluidframework/container-definitions" to '@fluidframework/core-interfaces'
+- Remove npm specific IPackage interface
+- Simplify the IFluidPackage by removing browser and npm specific properties
+- Add new interface IFluidBrowserPackage, and isFluidBrowserPackage which defines browser specific properties
+- Added resolveFluidPackageEnvironment helper for resolving a package environment
+
+### DataObject changes
+DataObject are now always created when Data Store is created. Full initialization for existing objects (in file) continues to happen to be on demand, i.e. when request() is processed. Full DataObject initialization does happen for newly created (detached) DataObjects.
+The impact of that change is that all changed objects would get loaded by summarizer container, but would not get initialized. Before this change, summarizer would not be loading any DataObjects.
+This change
+1. Ensures that initial summary generated for when data store attaches to container has fully initialized object, with all DDSs created. Before this change this initial snapshot was empty in most cases.
+2. Allows DataObjects to modify FluidDataStoreRuntime behavior before it gets registered and used by the rest of the system, including setting various hooks.
+
+But it also puts more constraints on DataObject - its constructor should be light and not do any expensive work (all such work should be done in corresponding initialize methods), or access any data store runtime functionality that requires fully initialized runtime (like loading DDSs will not work in this state)
+
+### RequestParser
+RequestParser's ctor is made protected. Please replace this code
+```
+    const a = new RequestParser(request);
+```
+with this one:
+```
+    const a = RequestParser.create(request);
+```
+
+### IFluidLodable.url is removed
+`url` property is removed. If you need a path to an object (in a container), you can use IFluidLoadable.handle.absolutePath instead.
+
+### Loader Constructor Changes
+The loader constructor has changed to now take a props object, rather than a series of paramaters. This should make it easier to construct loaders as the optional services can be easily excluded.
+
+Before:
+``` typescript
+    const loader = new Loader(
+        urlResolver,
+        documentServiceFactory,
+        codeLoader,
+        { blockUpdateMarkers: true },
+        {},
+        new Map(),
+    );
+```
+
+After:
+``` typescript
+    const loader = new Loader({
+        urlResolver,
+        documentServiceFactory,
+        codeLoader,
+    });
+```
+
+if for some reason this change causes you problems, we've added a deprecated `Loader._create` method that has the same parameters as the previous constructor which can be used in the interim.
+
+### Moving DriverHeader and merge with CreateNewHeader
+Compile time only API breaking change between runtime and driver.  Only impacts driver implementer.
+No back-compat or mix version impact.
+
+DriverHeader is a driver concept, so move from core-interface to driver-definitions. CreateNewHeader is also a kind of driver header, merged it into DriverHeader.
+
+### ODSP status codes moved modules from odsp-driver to odsp-doclib-utils
+Error/status codes like `offlineFetchFailureStatusCode` which used to be imported like `import { offlineFetchFailureStatusCode } from '@fluidframework/@odsp-driver';` have been moved to `odspErrorUtils.ts` in `odsp-doclib-utils`.
+
+## 0.27 Breaking Changes
 - [Local Web Host Removed](#Local-Web-Host-Removed)
 
 ### Local Web Host Removed
@@ -12,7 +184,7 @@ Local Web host is removed. Users who are using the local web host can use exampl
 - [Container runtime event changes](#Container-runtime-event-changes)
 - [Component is removed from telemetry event names](#Component-is-removed-from-telemetry-event-names)
 - [IComponentContextLegacy is removed](#IComponentContextLegacy-is-removed)
-- [IContainerRuntimeBase._createDataStoreWithProps() is removed](#IContainerRuntimeBase._createDataStoreWithProps-is-removed)
+- [~~IContainerRuntimeBase._createDataStoreWithProps() is removed~~](#IContainerRuntimeBase._createDataStoreWithProps-is-removed)
 - [_createDataStore() APIs are removed](#_createDataStore-APIs-are-removed)
 - [createDataStoreWithRealizationFn() APIs are removed](#createDataStoreWithRealizationFn()-APIs-are-removed)
 - [getDataStore() APIs is removed](#getDataStore()-APIs-is-removed)
@@ -46,6 +218,8 @@ SignalComponentNotFound -> SignalFluidDataStoreNotFound
 Deprecated in 0.18, removed.
 
 ### IContainerRuntimeBase._createDataStoreWithProps is removed
+**Note: This change has been reverted for 0.25 and will be pushed to a later release.**
+
 `IContainerRuntimeBase._createDataStoreWithProps()` has been removed. Please use `IContainerRuntimeBase.createDataStore()` (returns IFluidRouter).
 If you need to pass props to data store, either use request() route to pass initial props directly, or to query Fluid object to interact with it (pass props / call methods to configure object).
 
@@ -67,9 +241,9 @@ You can use handleFromLegacyUri() for creating handles from container-internal U
 
 ### Package Renames
 As a follow up to the changes in 0.24 we are updating a number of package names
-- `@fluidframework/core-interfaces` is renamed to `@fluidframework/core-interfaces`
-- `@fluidframework/datastore-definitions` is renamed to `@fluidframework/datastore-definitions`
-- `@fluidframework/datastore` is renamed to `@fluidframework/datastore`
+- `@fluidframework/component-core-interfaces` is renamed to `@fluidframework/core-interfaces`
+- `@fluidframework/component-runtime-definitions` is renamed to `@fluidframework/datastore-definitions`
+- `@fluidframework/component-runtime` is renamed to `@fluidframework/datastore`
 - `@fluidframework/webpack-component-loader` is renamed to `@fluidframework/webpack-fluid-loader`
 
 ### IComponent and IComponent Interfaces Removed
@@ -281,7 +455,7 @@ example:
     const builder = new RuntimeRequestHandlerBuilder();
     builder.pushHandler(...this.requestHandlers);
     builder.pushHandler(defaultRouteRequestHandler("defaultComponent"));
-    builder.pushHandler(deprecated_innerRequestHandler());
+    builder.pushHandler(innerRequestHandler());
 
     const runtime = await ContainerRuntime.load(
         context,

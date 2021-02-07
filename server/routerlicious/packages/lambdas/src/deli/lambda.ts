@@ -5,14 +5,13 @@
 
 /* eslint-disable no-null/no-null */
 
-import { strict as assert } from "assert";
+import assert from "assert";
 import { RangeTracker } from "@fluidframework/common-utils";
 import { isSystemType } from "@fluidframework/protocol-base";
 import {
     ISequencedDocumentAugmentedMessage,
     IBranchOrigin,
     IClientJoin,
-    IDocumentMessage,
     IDocumentSystemMessage,
     ISequencedDocumentMessage,
     ISequencedDocumentSystemMessage,
@@ -24,24 +23,26 @@ import { canSummarize } from "@fluidframework/server-services-client";
 import {
     ControlMessageType,
     extractBoxcar,
-    ICollection,
+    IClientSequenceNumber,
     IContext,
     IControlMessage,
-    IDocument,
+    IDeliState,
     IMessage,
     INackMessage,
     IPartitionLambda,
     IProducer,
     IRawOperationMessage,
     ISequencedOperationMessage,
+    IServiceConfiguration,
     ITicketedMessage,
     NackOperationType,
     RawOperationType,
     SequencedOperationType,
     IQueuedMessage,
 } from "@fluidframework/server-services-core";
-import { CheckpointContext, ICheckpointParams, IClientSequenceNumber, IDeliCheckpoint } from "./checkpointContext";
+import { CheckpointContext } from "./checkpointContext";
 import { ClientSequenceNumberManager } from "./clientSeqManager";
+import { IDeliCheckpointManager, ICheckpointParams } from "./checkpointManager";
 
 enum IncomingMessageOrder {
     Duplicate,
@@ -77,11 +78,6 @@ interface ITicketedMessageOutput {
     instruction: InstructionType;
 }
 
-/**
- * Maps from a branch to a clientId stored in the MSN map
- */
-const getBranchClientId = (branch: string) => `branch$${branch}`;
-
 export class DeliLambda implements IPartitionLambda {
     private sequenceNumber: number;
     private durableSequenceNumber: number;
@@ -103,7 +99,7 @@ export class DeliLambda implements IPartitionLambda {
     private idleTimer: any;
     private noopTimer: any;
     private noActiveClients = false;
-    // eslint-disable-next-line @typescript-eslint/ban-ts-ignore
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     private canClose = false;
 
@@ -111,14 +107,11 @@ export class DeliLambda implements IPartitionLambda {
         private readonly context: IContext,
         private readonly tenantId: string,
         private readonly documentId: string,
-        readonly lastCheckpoint: IDeliCheckpoint,
-        dbObject: IDocument,
-        collection: ICollection<IDocument>,
+        readonly lastCheckpoint: IDeliState,
+        checkpointManager: IDeliCheckpointManager,
         private readonly forwardProducer: IProducer,
         private readonly reverseProducer: IProducer,
-        private readonly clientTimeout: number,
-        private readonly activityTimeout: number,
-        private readonly noOpConsolidationTimeout: number) {
+        private readonly serviceConfiguration: IServiceConfiguration) {
         // Instantiate existing clients
         if (lastCheckpoint.clients) {
             for (const client of lastCheckpoint.clients) {
@@ -133,29 +126,6 @@ export class DeliLambda implements IPartitionLambda {
             }
         }
 
-        // Setup branch information
-        if (dbObject.parent) {
-            if (lastCheckpoint.branchMap) {
-                this.branchMap = new RangeTracker(lastCheckpoint.branchMap);
-            } else {
-                // Initialize the range tracking window
-                this.branchMap = new RangeTracker(
-                    dbObject.parent.minimumSequenceNumber,
-                    dbObject.parent.minimumSequenceNumber);
-                for (let i = dbObject.parent.minimumSequenceNumber + 1; i <= dbObject.parent.sequenceNumber; i++) {
-                    this.branchMap.add(i, i);
-                }
-
-                // Add in the client representing the parent
-                this.clientSeqManager.upsertClient(
-                    getBranchClientId(dbObject.parent.documentId),
-                    dbObject.parent.sequenceNumber,
-                    dbObject.parent.minimumSequenceNumber,
-                    dbObject.createTime,
-                    false);
-            }
-        }
-
         // Initialize counting context
         this.sequenceNumber = lastCheckpoint.sequenceNumber;
         this.term = lastCheckpoint.term;
@@ -165,12 +135,13 @@ export class DeliLambda implements IPartitionLambda {
         this.minimumSequenceNumber = msn === -1 ? this.sequenceNumber : msn;
 
         this.logOffset = lastCheckpoint.logOffset;
-        this.checkpointContext = new CheckpointContext(this.tenantId, this.documentId, collection, context);
+        this.checkpointContext = new CheckpointContext(this.tenantId, this.documentId, checkpointManager, context);
     }
 
     public handler(rawMessage: IQueuedMessage): void {
         // In cases where we are reprocessing messages we have already checkpointed exit early
         if (rawMessage.offset <= this.logOffset) {
+            this.context.checkpoint(rawMessage);
             return;
         }
 
@@ -234,7 +205,11 @@ export class DeliLambda implements IPartitionLambda {
                 };
                 this.context.log.error(
                     `Could not send message to scriptorium: ${JSON.stringify(error)}`, { messageMetaData });
-                this.context.error(error, true);
+                this.context.error(error, {
+                    restart: true,
+                    tenantId: this.tenantId,
+                    documentId: this.documentId,
+                });
             });
 
         // Start a timer to check inactivity on the document. To trigger idle client leave message,
@@ -257,11 +232,11 @@ export class DeliLambda implements IPartitionLambda {
         }
 
         // Update and retrieve the minimum sequence number
-        let message = rawMessage as IRawOperationMessage;
-        let systemContent = this.extractSystemContent(message);
+        const message = rawMessage as IRawOperationMessage;
+        const systemContent = this.extractSystemContent(message);
 
         // Check incoming message order. Nack if there is any gap so that the client can resend.
-        const messageOrder = this.checkOrder(message, systemContent);
+        const messageOrder = this.checkOrder(message);
         if (messageOrder === IncomingMessageOrder.Duplicate) {
             return;
         } else if (messageOrder === IncomingMessageOrder.Gap) {
@@ -272,74 +247,65 @@ export class DeliLambda implements IPartitionLambda {
                 `Gap detected in incoming op`);
         }
 
-        // Cases only applies to non-integration messages
-        if (message.operation.type !== MessageType.Integrate) {
-            // Handle client join/leave and fork messages.
-            if (!message.clientId) {
-                if (message.operation.type === MessageType.ClientLeave) {
-                    // Return if the client has already been removed due to a prior leave message.
-                    if (!this.clientSeqManager.removeClient(systemContent)) {
-                        return;
-                    }
-                } else if (message.operation.type === MessageType.ClientJoin) {
-                    const clientJoinMessage = systemContent as IClientJoin;
-                    const isNewClient = this.clientSeqManager.upsertClient(
-                        clientJoinMessage.clientId,
-                        0,
-                        this.minimumSequenceNumber,
-                        message.timestamp,
-                        true,
-                        clientJoinMessage.detail.scopes);
-                    // Return if the client has already been added due to a prior join message.
-                    if (!isNewClient) {
-                        return;
-                    }
-                    this.canClose = false;
-                } else if (message.operation.type === MessageType.Fork) {
-                    const messageMetaData = {
-                        documentId: this.documentId,
-                        tenantId: this.tenantId,
-                    };
-                    this.context.log.info(`Fork ${message.documentId} -> ${systemContent.name}`, { messageMetaData });
+        // Handle client join/leave messages.
+        if (!message.clientId) {
+            if (message.operation.type === MessageType.ClientLeave) {
+                // Return if the client has already been removed due to a prior leave message.
+                if (!this.clientSeqManager.removeClient(systemContent)) {
+                    return;
                 }
-            } else {
-                // Nack inexistent client.
-                const client = this.clientSeqManager.get(message.clientId);
-                if (!client || client.nack) {
+            } else if (message.operation.type === MessageType.ClientJoin) {
+                const clientJoinMessage = systemContent as IClientJoin;
+                const isNewClient = this.clientSeqManager.upsertClient(
+                    clientJoinMessage.clientId,
+                    0,
+                    this.minimumSequenceNumber,
+                    message.timestamp,
+                    true,
+                    clientJoinMessage.detail.scopes);
+                // Return if the client has already been added due to a prior join message.
+                if (!isNewClient) {
+                    return;
+                }
+                this.canClose = false;
+            }
+        } else {
+            // Nack inexistent client.
+            const client = this.clientSeqManager.get(message.clientId);
+            if (!client || client.nack) {
+                return this.createNackMessage(
+                    message,
+                    400,
+                    NackErrorType.BadRequestError,
+                    `Nonexistent client`);
+            }
+            // Verify that the message is within the current window.
+            // -1 check just for directly sent ops (e.g., using REST API).
+            if (message.clientId &&
+                message.operation.referenceSequenceNumber !== -1 &&
+                message.operation.referenceSequenceNumber < this.minimumSequenceNumber) {
+                this.clientSeqManager.upsertClient(
+                    message.clientId,
+                    message.operation.clientSequenceNumber,
+                    this.minimumSequenceNumber,
+                    message.timestamp,
+                    true,
+                    [],
+                    true);
+                return this.createNackMessage(
+                    message,
+                    400,
+                    NackErrorType.BadRequestError,
+                    `Refseq ${message.operation.referenceSequenceNumber} < ${this.minimumSequenceNumber}`);
+            }
+            // Nack if an unauthorized client tries to summarize.
+            if (message.operation.type === MessageType.Summarize) {
+                if (!canSummarize(client.scopes)) {
                     return this.createNackMessage(
                         message,
-                        400,
-                        NackErrorType.BadRequestError,
-                        `Nonexistent client`);
-                }
-                // Verify that the message is within the current window.
-                // -1 check just for directly sent ops (e.g., using REST API).
-                if (message.clientId &&
-                    message.operation.referenceSequenceNumber !== -1 &&
-                    message.operation.referenceSequenceNumber < this.minimumSequenceNumber) {
-                    this.clientSeqManager.upsertClient(
-                        message.clientId,
-                        message.operation.clientSequenceNumber,
-                        this.minimumSequenceNumber,
-                        message.timestamp,
-                        true,
-                        [],
-                        true);
-                    return this.createNackMessage(
-                        message,
-                        400,
-                        NackErrorType.BadRequestError,
-                        `Refseq ${message.operation.referenceSequenceNumber} < ${this.minimumSequenceNumber}`);
-                }
-                // Nack if an unauthorized client tries to summarize.
-                if (message.operation.type === MessageType.Summarize) {
-                    if (!canSummarize(client.scopes)) {
-                        return this.createNackMessage(
-                            message,
-                            403,
-                            NackErrorType.InvalidScopeError,
-                            `Client ${message.clientId} does not have summary permission`);
-                    }
+                        403,
+                        NackErrorType.InvalidScopeError,
+                        `Client ${message.clientId} does not have summary permission`);
                 }
             }
         }
@@ -348,96 +314,34 @@ export class DeliLambda implements IPartitionLambda {
         // We don't increment sequence number for noops sent by client since they will
         // be consolidated and sent later as raw message.
         let sequenceNumber = this.sequenceNumber;
-        let origin: IBranchOrigin;
-        if (message.operation.type === MessageType.Integrate) {
-            sequenceNumber = this.revSequenceNumber();
-
-            // Branch operation is the original message
-            const branchOperation = systemContent as ISequencedOperationMessage;
-            const branchDocumentMessage = branchOperation.operation;
-            const branchClientId = getBranchClientId(branchOperation.documentId);
-
-            // Do I transform the ref or the MSN - I guess the ref here because it's that key space
-            const transformedRefSeqNumber = this.transformBranchSequenceNumber(
-                branchDocumentMessage.referenceSequenceNumber);
-            const transformedMinSeqNumber = this.transformBranchSequenceNumber(
-                branchDocumentMessage.minimumSequenceNumber);
-
-            // Update the branch mappings
-            this.branchMap.add(branchDocumentMessage.sequenceNumber, sequenceNumber);
-            this.branchMap.updateBase(branchDocumentMessage.minimumSequenceNumber);
-
-            // A merge message contains the sequencing information in the target branch's (i.e. this)
-            // coordinate space. But contains the original message in the contents.
-            const operation: IDocumentMessage = {
-                clientSequenceNumber: branchDocumentMessage.sequenceNumber,
-                contents: branchDocumentMessage.contents,
-                referenceSequenceNumber: transformedRefSeqNumber,
-                traces: message.operation.traces,
-                type: branchDocumentMessage.type,
-            };
-            if (isSystemType(branchDocumentMessage.type)) {
-                const systemMessage = operation as IDocumentSystemMessage;
-                systemMessage.data = (branchDocumentMessage as ISequencedDocumentSystemMessage).data;
+        if (message.clientId) {
+            // Don't rev for client sent no-ops
+            if (message.operation.type !== MessageType.NoOp) {
+                // Rev the sequence number
+                sequenceNumber = this.revSequenceNumber();
+                // We checked earlier for the below case. Why checking again?
+                // Only for directly sent ops (e.g., using REST API). To avoid getting nacked,
+                // We rev the refseq number to current sequence number.
+                if (message.operation.referenceSequenceNumber === -1) {
+                    message.operation.referenceSequenceNumber = sequenceNumber;
+                }
             }
+            assert(
+                message.operation.referenceSequenceNumber >= this.minimumSequenceNumber,
+                `${message.operation.referenceSequenceNumber} >= ${this.minimumSequenceNumber}`);
 
-            const transformed: IRawOperationMessage = {
-                clientId: branchDocumentMessage.clientId,
-                documentId: this.documentId,
-                operation,
-                tenantId: message.tenantId,
-                timestamp: message.timestamp,
-                type: RawOperationType,
-            };
-
-            // Set origin information for the message
-            origin = {
-                id: branchOperation.documentId,
-                minimumSequenceNumber: branchDocumentMessage.minimumSequenceNumber,
-                sequenceNumber: branchDocumentMessage.sequenceNumber,
-            };
-
-            message = transformed;
-            // Need to re-extract system content for the transformed messages
-            systemContent = this.extractSystemContent(message);
-
-            // Update the entry for the branch client
             this.clientSeqManager.upsertClient(
-                branchClientId,
-                branchDocumentMessage.sequenceNumber,
-                transformedMinSeqNumber,
+                message.clientId,
+                message.operation.clientSequenceNumber,
+                message.operation.referenceSequenceNumber,
                 message.timestamp,
-                false);
+                true);
         } else {
-            if (message.clientId) {
-                // Don't rev for client sent no-ops
-                if (message.operation.type !== MessageType.NoOp) {
-                    // Rev the sequence number
-                    sequenceNumber = this.revSequenceNumber();
-                    // We checked earlier for the below case. Why checking again?
-                    // Only for directly sent ops (e.g., using REST API). To avoid getting nacked,
-                    // We rev the refseq number to current sequence number.
-                    if (message.operation.referenceSequenceNumber === -1) {
-                        message.operation.referenceSequenceNumber = sequenceNumber;
-                    }
-                }
-                assert(
-                    message.operation.referenceSequenceNumber >= this.minimumSequenceNumber,
-                    `${message.operation.referenceSequenceNumber} >= ${this.minimumSequenceNumber}`);
-
-                this.clientSeqManager.upsertClient(
-                    message.clientId,
-                    message.operation.clientSequenceNumber,
-                    message.operation.referenceSequenceNumber,
-                    message.timestamp,
-                    true);
-            } else {
-                // Don't rev for server sent no-ops, noClient, or Control messages.
-                if (!(message.operation.type === MessageType.NoOp ||
-                    message.operation.type === MessageType.NoClient ||
-                    message.operation.type === MessageType.Control)) {
-                    sequenceNumber = this.revSequenceNumber();
-                }
+            // Don't rev for server sent no-ops, noClient, or Control messages.
+            if (!(message.operation.type === MessageType.NoOp ||
+                message.operation.type === MessageType.NoClient ||
+                message.operation.type === MessageType.Control)) {
+                sequenceNumber = this.revSequenceNumber();
             }
         }
 
@@ -501,16 +405,17 @@ export class DeliLambda implements IPartitionLambda {
                         durableSequenceNumber: number
                         clearCache: boolean
                     };
-                // Deli cache is only cleared when no clients have joined since last noClient was sent to alfred.
-                if (controlContent.clearCache && this.noActiveClients) {
-                    instruction = InstructionType.ClearCache;
-                    this.canClose = true;
-                    this.context.log.info(`Deli cache will be cleared`, { messageMetaData });
-                }
                 const dsn = controlContent.durableSequenceNumber;
-                assert(dsn >= this.durableSequenceNumber,
-                    `Incoming dsn@${dsn} < Current dsn@${this.durableSequenceNumber}`);
-                this.durableSequenceNumber = controlContent.durableSequenceNumber;
+                if (dsn >= this.durableSequenceNumber) {
+                    // Deli cache is only cleared when no clients have joined since last noClient was sent to alfred.
+                    if (controlContent.clearCache && this.noActiveClients) {
+                        instruction = InstructionType.ClearCache;
+                        this.canClose = true;
+                        this.context.log.info(`Deli cache will be cleared`, { messageMetaData });
+                    }
+
+                    this.durableSequenceNumber = dsn;
+                }
             }
         }
 
@@ -521,7 +426,7 @@ export class DeliLambda implements IPartitionLambda {
         }
 
         // And now craft the output message
-        const outputMessage = this.createOutputMessage(message, origin, sequenceNumber, systemContent);
+        const outputMessage = this.createOutputMessage(message, undefined /* origin */, sequenceNumber, systemContent);
 
         const sequencedMessage: ISequencedOperationMessage = {
             documentId: message.documentId,
@@ -545,6 +450,7 @@ export class DeliLambda implements IPartitionLambda {
         if (isSystemType(message.operation.type)) {
             const operation = message.operation as IDocumentSystemMessage;
             if (operation.data) {
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return
                 return JSON.parse(operation.data);
             }
         }
@@ -585,20 +491,13 @@ export class DeliLambda implements IPartitionLambda {
         }
     }
 
-    private checkOrder(message: IRawOperationMessage, content: any): IncomingMessageOrder {
-        if (message.operation.type !== MessageType.Integrate && !message.clientId) {
+    private checkOrder(message: IRawOperationMessage): IncomingMessageOrder {
+        if (!message.clientId) {
             return IncomingMessageOrder.ConsecutiveOrSystem;
         }
 
-        let clientId: string;
-        let clientSequenceNumber: number;
-        if (message.operation.type === MessageType.Integrate) {
-            clientId = getBranchClientId(content.documentId);
-            clientSequenceNumber = content.operation.sequenceNumber;
-        } else {
-            clientId = message.clientId;
-            clientSequenceNumber = message.operation.clientSequenceNumber;
-        }
+        const clientId = message.clientId;
+        const clientSequenceNumber = message.operation.clientSequenceNumber;
 
         const client = this.clientSeqManager.get(clientId);
         if (!client) {
@@ -635,7 +534,11 @@ export class DeliLambda implements IPartitionLambda {
                 tenantId: this.tenantId,
             };
             this.context.log.error(`Could not send message to alfred: ${JSON.stringify(error)}`, { messageMetaData });
-            this.context.error(error, true);
+            this.context.error(error, {
+                restart: true,
+                tenantId: this.tenantId,
+                documentId: this.documentId,
+            });
         });
     }
 
@@ -661,7 +564,7 @@ export class DeliLambda implements IPartitionLambda {
             contents: null,
             data: JSON.stringify(clientId),
             referenceSequenceNumber: -1,
-            traces: [],
+            traces: this.serviceConfiguration.enableTraces ? [] : undefined,
             type: MessageType.ClientLeave,
         };
         const leaveMessage: IRawOperationMessage = {
@@ -717,7 +620,7 @@ export class DeliLambda implements IPartitionLambda {
                 clientSequenceNumber: -1,
                 contents: null,
                 referenceSequenceNumber: -1,
-                traces: [],
+                traces: this.serviceConfiguration.enableTraces ? [] : undefined,
                 type,
             },
             tenantId: this.tenantId,
@@ -749,7 +652,7 @@ export class DeliLambda implements IPartitionLambda {
         return checkpoint;
     }
 
-    private generateDeliCheckpoint(): IDeliCheckpoint {
+    private generateDeliCheckpoint(): IDeliState {
         return {
             branchMap: this.branchMap ? this.branchMap.serialize() : undefined,
             clients: this.clientSeqManager.cloneValues(),
@@ -768,18 +671,13 @@ export class DeliLambda implements IPartitionLambda {
         return ++this.sequenceNumber;
     }
 
-    private transformBranchSequenceNumber(sequenceNumber: number): number {
-        // -1 indicates an unused sequence number
-        return sequenceNumber !== -1 ? this.branchMap.get(sequenceNumber) : -1;
-    }
-
     /**
      * Get idle client.
      */
     private getIdleClient(timestamp: number): IClientSequenceNumber {
         if (this.clientSeqManager.count() > 0) {
             const client = this.clientSeqManager.peek();
-            if (client.canEvict && (timestamp - client.lastUpdate > this.clientTimeout)) {
+            if (client.canEvict && (timestamp - client.lastUpdate > this.serviceConfiguration.deli.clientTimeout)) {
                 return client;
             }
         }
@@ -794,7 +692,7 @@ export class DeliLambda implements IPartitionLambda {
                 const noOpMessage = this.createOpMessage(MessageType.NoOp);
                 this.sendToAlfred(noOpMessage);
             }
-        }, this.activityTimeout);
+        }, this.serviceConfiguration.deli.activityTimeout);
     }
 
     private clearIdleTimer() {
@@ -813,7 +711,7 @@ export class DeliLambda implements IPartitionLambda {
                 const noOpMessage = this.createOpMessage(MessageType.NoOp);
                 this.sendToAlfred(noOpMessage);
             }
-        }, this.noOpConsolidationTimeout);
+        }, this.serviceConfiguration.deli.noOpConsolidationTimeout);
     }
 
     private clearNoopConsolidationTimer() {

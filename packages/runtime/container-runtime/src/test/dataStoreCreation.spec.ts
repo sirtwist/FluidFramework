@@ -17,7 +17,7 @@ import {
 import { IFluidObject } from "@fluidframework/core-interfaces";
 import { IDocumentStorageService } from "@fluidframework/driver-definitions";
 import { MockFluidDataStoreRuntime } from "@fluidframework/test-runtime-utils";
-import { SummaryTracker, SummarizerNode } from "@fluidframework/runtime-utils";
+import { createRootSummarizerNodeWithGC } from "@fluidframework/runtime-utils";
 import { TelemetryNullLogger } from "@fluidframework/common-utils";
 import { LocalFluidDataStoreContext } from "../dataStoreContext";
 import { ContainerRuntime } from "../containerRuntime";
@@ -45,7 +45,6 @@ describe("Data Store Creation Tests", () => {
         const dataStoreAName = "dataStoreA";
         const dataStoreBName = "dataStoreB";
         const dataStoreCName = "dataStoreC";
-        let summaryTracker: SummaryTracker;
         let getCreateSummarizerNodeFn: (id: string) => CreateChildSummarizerNodeFn;
 
         // Helper function that creates a FluidDataStoreRegistryEntry with the registry entries
@@ -97,13 +96,11 @@ describe("Data Store Creation Tests", () => {
                 notifyDataStoreInstantiated: (c) => { },
                 on: (event, listener) => { },
             } as ContainerRuntime;
-            summaryTracker = new SummaryTracker("", 0, 0);
-            const summarizerNode = SummarizerNode.createRoot(
+            const summarizerNode = createRootSummarizerNodeWithGC(
                 new TelemetryNullLogger(),
                 (() => { }) as unknown as SummarizeInternalFn,
                 0,
-                0,
-                true);
+                0);
             getCreateSummarizerNodeFn = (id: string) => (si: SummarizeInternalFn) => summarizerNode.createChild(
                 si,
                 id,
@@ -121,9 +118,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await context.realize();
@@ -144,9 +142,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await context.realize();
@@ -167,9 +166,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextA.realize();
@@ -190,9 +190,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextB.realize();
@@ -213,9 +214,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreBId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextB.realize();
@@ -233,9 +235,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreCId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextC.realize();
@@ -256,9 +259,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextFake.realize();
@@ -279,9 +283,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextFake.realize();
@@ -302,9 +307,10 @@ describe("Data Store Creation Tests", () => {
                 containerRuntime,
                 storage,
                 scope,
-                summaryTracker,
                 getCreateSummarizerNodeFn(dataStoreId),
-                attachCb);
+                attachCb,
+                undefined,
+                false /* isRootDataStore */);
 
             try {
                 await contextC.realize();

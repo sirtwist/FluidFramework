@@ -9,14 +9,14 @@ import {
     IFluidConfiguration,
     IRequest,
     IResponse,
+    IFluidCodeDetails,
 } from "@fluidframework/core-interfaces";
 import { IDocumentStorageService } from "@fluidframework/driver-definitions";
 import {
-    ConnectionState,
+    IClientConfiguration,
     IClientDetails,
     IQuorum,
     ISequencedDocumentMessage,
-    IServiceConfiguration,
     ISnapshotTree,
     ITree,
     MessageType,
@@ -25,10 +25,9 @@ import {
     IDocumentMessage,
 } from "@fluidframework/protocol-definitions";
 import { IAudience } from "./audience";
-import { IBlobManager } from "./blobs";
 import { IDeltaManager } from "./deltas";
 import { ICriticalContainerError, ContainerWarning } from "./error";
-import { ICodeLoader, ILoader } from "./loader";
+import { ILoader, ILoaderOptions } from "./loader";
 
 // Represents the attachment state of the entity.
 export enum AttachState {
@@ -74,11 +73,6 @@ export interface IRuntime extends IDisposable {
     setConnectionState(connected: boolean, clientId?: string);
 
     /**
-     * Deprecated: Back-compat, supporting 0.16 data stores and earlier
-     */
-    changeConnectionState?: (value: ConnectionState, clientId?: string) => void;
-
-    /**
      * @deprecated in 0.14 async stop()
      * Use snapshot to get a snapshot for an IRuntimeState as needed, followed by dispose
      *
@@ -120,16 +114,15 @@ export interface IRuntime extends IDisposable {
 export interface IContainerContext extends IDisposable {
     readonly id: string;
     readonly existing: boolean | undefined;
-    readonly options: any;
+    readonly options: ILoaderOptions;
     readonly configuration: IFluidConfiguration;
     readonly clientId: string | undefined;
     readonly clientDetails: IClientDetails;
-    readonly parentBranch: string | null;
-    readonly blobManager: IBlobManager | undefined;
+    readonly codeDetails: IFluidCodeDetails;
     readonly storage: IDocumentStorageService | undefined | null;
     readonly connected: boolean;
     readonly branch: string;
-    readonly baseSnapshot: ISnapshotTree | null;
+    readonly baseSnapshot: ISnapshotTree | undefined;
     readonly submitFn: (type: MessageType, contents: any, batch: boolean, appData?: any) => number;
     readonly submitSignalFn: (contents: any) => void;
     readonly snapshotFn: (message: string) => Promise<void>;
@@ -138,9 +131,8 @@ export interface IContainerContext extends IDisposable {
     readonly quorum: IQuorum;
     readonly audience: IAudience | undefined;
     readonly loader: ILoader;
-    readonly codeLoader: ICodeLoader;
     readonly logger: ITelemetryLogger;
-    readonly serviceConfiguration: IServiceConfiguration | undefined;
+    readonly serviceConfiguration: IClientConfiguration | undefined;
     readonly version: string;
     readonly previousRuntimeState: IRuntimeState;
 

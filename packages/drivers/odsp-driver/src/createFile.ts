@@ -3,11 +3,11 @@
  * Licensed under the MIT License.
  */
 
-import { strict as assert } from "assert";
 import { Uint8ArrayToString } from "@fluidframework/common-utils";
-import { getGitType } from "@fluidframework/protocol-base";
 import { getDocAttributesFromProtocolSummary } from "@fluidframework/driver-utils";
-import { SummaryType, ISummaryTree, ISummaryBlob, MessageType } from "@fluidframework/protocol-definitions";
+import { fetchIncorrectResponse, invalidFileNameStatusCode } from "@fluidframework/odsp-doclib-utils";
+import { getGitType } from "@fluidframework/protocol-base";
+import { SummaryType, ISummaryTree, ISummaryBlob } from "@fluidframework/protocol-definitions";
 import { ITelemetryLogger } from "@fluidframework/common-definitions";
 import { PerformanceEvent } from "@fluidframework/telemetry-utils";
 import {
@@ -17,23 +17,20 @@ import {
     SnapshotTreeEntry,
     SnapshotType,
     ICreateFileResponse,
+    ISnapshotRequest,
 } from "./contracts";
 import { getUrlAndHeadersWithAuth } from "./getUrlAndHeadersWithAuth";
-import { OdspDriverUrlResolver } from "./odspDriverUrlResolver";
 import {
     getWithRetryForTokenRefresh,
-    fetchHelper,
     INewFileInfo,
     getOrigin,
 } from "./odspUtils";
 import { createOdspUrl } from "./createOdspUrl";
 import { getApiRoot } from "./odspUrlHelper";
-import {
-    throwOdspNetworkError,
-    invalidFileNameStatusCode,
-    fetchIncorrectResponse,
-} from "./odspError";
+import { throwOdspNetworkError } from "./odspError";
 import { TokenFetchOptions } from "./tokenFetch";
+import { EpochTracker } from "./epochTracker";
+import { OdspDriverUrlResolver } from "./odspDriverUrlResolver";
 
 const isInvalidFileName = (fileName: string): boolean => {
     const invalidCharsRegex = /["*/:<>?\\|]+/g;
@@ -41,7 +38,7 @@ const isInvalidFileName = (fileName: string): boolean => {
 };
 
 /**
- * Creates a new Fluid file. '.fluid' is appended to the filename
+ * Creates a new Fluid file.
  * Returns resolved url
  */
 export async function createNewFluidFile(
@@ -49,6 +46,7 @@ export async function createNewFluidFile(
     newFileInfo: INewFileInfo,
     logger: ITelemetryLogger,
     createNewSummary: ISummaryTree,
+    epochTracker: EpochTracker,
 ): Promise<IOdspResolvedUrl> {
     // Check for valid filename before the request to create file is actually made.
     if (isInvalidFileName(newFileInfo.filename)) {
@@ -56,7 +54,7 @@ export async function createNewFluidFile(
     }
 
     const filePath = newFileInfo.filePath ? encodeURIComponent(`/${newFileInfo.filePath}`) : "";
-    const encodedFilename = encodeURIComponent(`${newFileInfo.filename}.fluid`);
+    const encodedFilename = encodeURIComponent(newFileInfo.filename);
     const baseUrl =
         `${getApiRoot(getOrigin(newFileInfo.siteUrl))}/drives/${newFileInfo.driveId}/items/root:` +
         `${filePath}/${encodedFilename}`;
@@ -74,13 +72,14 @@ export async function createNewFluidFile(
                 const { url, headers } = getUrlAndHeadersWithAuth(initialUrl, storageToken);
                 headers["Content-Type"] = "application/json";
 
-                const fetchResponse = await fetchHelper<ICreateFileResponse>(
+                const fetchResponse = await epochTracker.fetchAndParseAsJSON<ICreateFileResponse>(
                     url,
                     {
                         body: JSON.stringify(containerSnapshot),
                         headers,
                         method: "POST",
-                    });
+                    },
+                    "createFile");
 
                 const content = fetchResponse.content;
                 if (!content || !content.itemId) {
@@ -105,10 +104,6 @@ function convertSummaryIntoContainerSnapshot(createNewSummary: ISummaryTree) {
         throw new Error("App and protocol summary required for create new path!!");
     }
     const documentAttributes = getDocAttributesFromProtocolSummary(protocolSummary);
-    // Currently for the scenarios we have we don't have ops in the detached container. So the
-    // sequence number would always be 0 here. However odsp requires to have at least 1 snapshot.
-    assert(documentAttributes.sequenceNumber === 0, "Sequence No for detached container snapshot should be 0");
-    documentAttributes.sequenceNumber = 1;
     const attributesSummaryBlob: ISummaryBlob = {
         type: SummaryType.Blob,
         content: JSON.stringify(documentAttributes),
@@ -122,25 +117,11 @@ function convertSummaryIntoContainerSnapshot(createNewSummary: ISummaryTree) {
         },
     };
     const snapshotTree = convertSummaryToSnapshotTreeForCreateNew(convertedCreateNewSummary);
-    const snapshot = {
+    const snapshot: ISnapshotRequest = {
         entries: snapshotTree.entries ?? [],
         message: "app",
-        sequenceNumber: 1,
+        sequenceNumber: documentAttributes.sequenceNumber,
         type: SnapshotType.Container,
-        ops: [{
-            op: {
-                clientId: null,
-                clientSequenceNumber: -1,
-                contents: null,
-                minimumSequenceNumber: 0,
-                referenceSequenceNumber: -1,
-                sequenceNumber: 1,
-                timestamp: Date.now(),
-                traces: [],
-                type: MessageType.NoOp,
-            },
-            sequenceNumber: 1,
-        }],
     };
     return snapshot;
 }
@@ -150,8 +131,9 @@ function convertSummaryIntoContainerSnapshot(createNewSummary: ISummaryTree) {
  */
 export function convertSummaryToSnapshotTreeForCreateNew(summary: ISummaryTree): ISnapshotTree {
     const snapshotTree: ISnapshotTree = {
+        type: "tree",
         entries: [],
-    }!;
+    };
 
     const keys = Object.keys(summary.tree);
     for (const key of keys) {
@@ -170,6 +152,7 @@ export function convertSummaryToSnapshotTreeForCreateNew(summary: ISummaryTree):
                 const encoding = typeof summaryObject.content === "string" ? "utf-8" : "base64";
 
                 value = {
+                    type: "blob",
                     content,
                     encoding,
                 };
